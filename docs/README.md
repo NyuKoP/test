@@ -10,6 +10,8 @@ This directory contains current architectural references, operational guidance, 
 - [Large file transfer](LARGE-FILE-TRANSFER.md)
 - [File transfer crypto optimization](CRYPTO-TRANSFER-OPTIMIZATION.md)
 - [Transport security invariants](SECURITY-transport-invariants.md)
+- [Release security](../RELEASE-SECURITY.md)
+- [Security policy and vulnerability reporting](../SECURITY.md)
 - [Manual two-device checklist](manual-two-device-checklist.md)
 
 ## Architecture and Security
@@ -18,6 +20,8 @@ This directory contains current architectural references, operational guidance, 
 | --- | --- |
 | [Transport and Routing Architecture](ARCH-transport-and-routing.md) | Available transports, route policy, controller contracts, and error classes |
 | [Transport Security Invariants](SECURITY-transport-invariants.md) | Security properties that transport changes must preserve |
+| [Release Security](../RELEASE-SECURITY.md) | Signing, notarization, Electron Fuses, Tor pin verification, and release checks |
+| [Security Policy](../SECURITY.md) | Supported versions and private vulnerability-reporting guidance |
 | [Large File Transfer](LARGE-FILE-TRANSFER.md) | Chunk sizing, bounded-memory flow, live Tor commands, and validated measurements |
 | [File Transfer Crypto Optimization](CRYPTO-TRANSFER-OPTIMIZATION.md) | Worker pipeline, transfer-scoped keys, and Direct SCTP backpressure |
 | [WebRTC Manual Pairing](webrtc-manual-pairing.md) | Manual direct peer-to-peer offer/answer pairing flow |

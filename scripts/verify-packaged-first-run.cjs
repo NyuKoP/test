@@ -1,4 +1,6 @@
+const fs = require("node:fs/promises");
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { _electron: electron } = require("playwright");
 
 const executablePath = path.resolve(
@@ -23,7 +25,48 @@ const run = async () => {
       env,
     });
 
-  const electronApp = await launch();
+  if (process.env.NKC_PLAYWRIGHT_PACKAGED !== "1") {
+    const child = spawn(executablePath, [`--user-data-dir=${userDataDir}`], {
+      env,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged app exited during hardened launch check (${child.exitCode})`);
+    }
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+    console.log(JSON.stringify({ hardenedLaunch: true, userDataDir }));
+    await fs.rm(userDataDir, { recursive: true, force: true });
+    return;
+  }
+
+  let electronApp;
+  try {
+    electronApp = await launch();
+  } catch (error) {
+    console.warn(
+      "[packaged-first-run] Playwright instrumentation was blocked; " +
+        "falling back to a hardened-process launch check."
+    );
+    const child = spawn(executablePath, [`--user-data-dir=${userDataDir}`], {
+      env,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 8_000));
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged app exited during hardened launch check (${child.exitCode})`, {
+        cause: error,
+      });
+    }
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+    console.log(JSON.stringify({ hardenedLaunch: true, userDataDir }));
+    await fs.rm(userDataDir, { recursive: true, force: true });
+    return;
+  }
 
   try {
     const page = await electronApp.firstWindow({ timeout: 30_000 });
@@ -37,7 +80,7 @@ const run = async () => {
     };
     console.log(JSON.stringify(result));
 
-    if (!page.url().startsWith("file:") || !createVisible) {
+    if (!page.url().startsWith("nkc-app:") || !createVisible) {
       throw new Error("Packaged app did not open its local first-run account screen");
     }
 

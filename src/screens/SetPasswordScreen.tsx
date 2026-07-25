@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "../appRouter";
 
 const SetPasswordScreen = () => {
   const navigate = useNavigate();

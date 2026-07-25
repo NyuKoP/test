@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, HashRouter } from "react-router-dom";
+import { BrowserRouter, HashRouter } from "./appRouter";
 import "./index.css";
 import App from "./app/App";
 import { bindP2PConnectionStatusBridge } from "./store/useP2PStore";

@@ -59,15 +59,16 @@ export default function PrivacySettings({
         </div>
 
         <div className="mt-4 grid gap-3">
-          <label className="flex items-center justify-between text-sm text-nkc-text">
+          <div className="flex items-center justify-between text-sm text-nkc-text">
             <span>{t("PIN 잠금", "PIN lock")}</span>
             <ToggleSwitch
               label={t("PIN 잠금", "PIN lock")}
               checked={pinEnabled}
               disabled={!pinAvailable}
+              testId="privacy-pin-lock-switch"
               onChange={(checked) => void onTogglePin(checked)}
             />
-          </label>
+          </div>
 
           {!pinAvailable ? (
             <div className="text-xs text-nkc-muted">

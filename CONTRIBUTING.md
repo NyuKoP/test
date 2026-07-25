@@ -20,6 +20,7 @@ npm run lint:encoding
 npm test -- --run
 npm run test:native
 npm run build
+npm audit --omit=dev --audit-level=high
 ```
 
 Run `npm run test:ui` for user-flow or visual changes. Run the live Tor commands only when Tor is installed and the change affects its actual runtime path.
@@ -58,6 +59,11 @@ Changes in `src/crypto/`, `src/security/`, transport selection, persistence, dev
 Do not replace established cryptographic primitives or alter serialization/AAD formats without compatibility analysis and dedicated tests.
 
 Payload-limit changes must remain consistent across `src/net/mediaTransferLimits.ts`, the Electron onion controller, renderer transport frame validation, and the Go transport/offline queue. Preserve bounded memory, inbox capacity limits, request timeouts, and retry caps when increasing throughput.
+
+Changes to Electron packaging, signing, update publication, native-worker integrity, or Tor pin
+maintenance must follow [Release Security](RELEASE-SECURITY.md). Do not publish an unsigned local
+build as an official release. Tor pins must come through the dedicated workflow that verifies the
+official checksum manifest and its pinned OpenPGP signing-key fingerprint.
 
 ## Native Worker
 

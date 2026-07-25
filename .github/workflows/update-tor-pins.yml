@@ -23,8 +23,44 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Fetch current Tor pins
-        run: npm run update:tor-pins
+      - name: Fetch and verify current Tor checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tor-pins"
+          curl --fail --silent --show-error --location \
+            https://dist.torproject.org/torbrowser/ \
+            --output "$RUNNER_TEMP/tor-pins/index.html"
+          version="$(node -e '
+            const fs = require("fs");
+            const text = fs.readFileSync(process.argv[1], "utf8");
+            const versions = [...text.matchAll(/href="(\d+\.\d+\.\d+)\//g)]
+              .map((match) => match[1])
+              .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            if (!versions.length) process.exit(1);
+            process.stdout.write(versions.at(-1));
+          ' "$RUNNER_TEMP/tor-pins/index.html")"
+          base="https://dist.torproject.org/torbrowser/$version"
+          curl --fail --silent --show-error --location \
+            "$base/sha256sums-signed-build.txt" \
+            --output "$RUNNER_TEMP/tor-pins/manifest.txt"
+          curl --fail --silent --show-error --location \
+            "$base/sha256sums-signed-build.txt.asc" \
+            --output "$RUNNER_TEMP/tor-pins/manifest.txt.asc"
+          curl --fail --silent --show-error --location \
+            https://keys.openpgp.org/vks/v1/by-fingerprint/EF6E286DDA85EA2A4BA7DE684E2C6E8793298290 \
+            --output "$RUNNER_TEMP/tor-pins/tor-browser.asc"
+          gpg --batch --import "$RUNNER_TEMP/tor-pins/tor-browser.asc"
+          fingerprint="$(gpg --batch --with-colons --fingerprint \
+            EF6E286DDA85EA2A4BA7DE684E2C6E8793298290 |
+            awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$fingerprint" = "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290"
+          gpg --batch --verify \
+            "$RUNNER_TEMP/tor-pins/manifest.txt.asc" \
+            "$RUNNER_TEMP/tor-pins/manifest.txt"
+          NKC_TOR_INDEX_FILE="$RUNNER_TEMP/tor-pins/index.html" \
+            NKC_TOR_MANIFEST_FILE="$RUNNER_TEMP/tor-pins/manifest.txt" \
+            npm run update:tor-pins
 
       - name: Test pin lookup
         run: npm test -- --run src/main/onion/install/__tests__/pinnedHash.test.ts
@@ -47,6 +83,6 @@ jobs:
           git push --set-upstream origin "$branch"
           gh pr create \
             --title "chore: update Tor bundle pins" \
-            --body "Automated update from Tor's official signed checksum manifest. The focused pin lookup tests passed." \
+            --body "Automated update from Tor's OpenPGP-verified checksum manifest. The signing-key fingerprint and focused pin lookup tests passed." \
             --base main \
             --head "$branch"

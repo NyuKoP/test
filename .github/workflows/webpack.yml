@@ -32,6 +32,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Lint
         run: npm run lint
 
@@ -74,11 +77,32 @@ jobs:
 
       - name: Package macOS
         if: runner.os == 'macOS'
-        run: npm run dist:mac
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          test -n "$CSC_LINK" &&
+            test -n "$CSC_KEY_PASSWORD" &&
+            test -n "$APPLE_ID" &&
+            test -n "$APPLE_APP_SPECIFIC_PASSWORD" &&
+            test -n "$APPLE_TEAM_ID"
+          npm run dist:mac
 
       - name: Package Windows
         if: runner.os == 'Windows'
-        run: npm run dist:win
+        env:
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          if (-not $env:CSC_LINK -or -not $env:CSC_KEY_PASSWORD) {
+            throw "Windows code-signing secrets are required"
+          }
+          npm run dist:win
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

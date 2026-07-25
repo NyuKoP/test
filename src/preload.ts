@@ -49,6 +49,12 @@ contextBridge.exposeInMainWorld("nkc", {
     bodyBase64?: string;
     timeoutMs?: number;
   }) => ipcRenderer.invoke("nkc:onionFetch", req) as Promise<unknown>,
+  authorizeOnionFetchOrigin: (url: string) =>
+    ipcRenderer.invoke("nkc:authorizeOnionFetchOrigin", url) as Promise<{
+      ok: boolean;
+      origin?: string;
+      error?: string;
+    }>,
   setOnionProxy: (proxyUrl: string | null) =>
     ipcRenderer.invoke("nkc:setOnionProxy", proxyUrl) as Promise<unknown>,
   getOnionControllerUrl: () =>

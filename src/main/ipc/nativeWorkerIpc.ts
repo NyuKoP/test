@@ -10,6 +10,45 @@ type RegisterNativeWorkerIpcOptions = {
   getNativeWorkerClient: () => NativeWorkerClient | null;
 };
 
+const isFiniteInteger = (value: unknown) =>
+  typeof value === "number" && Number.isSafeInteger(value);
+
+const isSchedulePayload = (payload: unknown) => {
+  if (!payload || typeof payload !== "object") return false;
+  const value = payload as {
+    now?: unknown;
+    mode?: unknown;
+    batchSize?: unknown;
+    items?: unknown;
+  };
+  if (
+    !isFiniteInteger(value.now) ||
+    !["direct", "tor", "onion"].includes(String(value.mode)) ||
+    !isFiniteInteger(value.batchSize) ||
+    (value.batchSize as number) < 1 ||
+    (value.batchSize as number) > 100 ||
+    !Array.isArray(value.items) ||
+    value.items.length > 400
+  ) {
+    return false;
+  }
+  return value.items.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const record = item as Record<string, unknown>;
+    return (
+      typeof record.id === "string" &&
+      record.id.length > 0 &&
+      record.id.length <= 256 &&
+      (record.priority === "high" || record.priority === "normal") &&
+      isFiniteInteger(record.attempts) &&
+      (record.attempts as number) >= 0 &&
+      isFiniteInteger(record.nextAttemptAtMs) &&
+      isFiniteInteger(record.expiresAtMs) &&
+      isFiniteInteger(record.createdAtMs)
+    );
+  });
+};
+
 let preloadToken = crypto.randomUUID();
 let isTokenConsumed = false;
 
@@ -88,6 +127,7 @@ export const registerNativeWorkerIpc = (options: RegisterNativeWorkerIpcOptions)
 
   ipcMain.handle("nativeWorker:schedule", async (event, payload: unknown) => {
     options.assertTrustedIpcSender(event);
+    if (!isSchedulePayload(payload)) return { ok: false, error: "invalid-schedule-request" };
     const client = options.getNativeWorkerClient();
     if (!client) return { ok: false, error: "native-worker-unavailable" };
     const result = await client.request("scheduler.plan", payload, 5_000);

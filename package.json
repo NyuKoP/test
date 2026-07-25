@@ -16,14 +16,13 @@
     "generate:onion-pins": "node scripts/generateOnionPins.mjs",
     "update:tor-pins": "node scripts/updateTorPins.mjs",
     "generate:icons": "node scripts/generateAppIcon.mjs",
-    "edit:win-exe": "node scripts/editWindowsExecutable.mjs",
     "lint:encoding": "node scripts/check-utf8.mjs",
     "build:native": "node scripts/build-go-worker.mjs",
     "test:native": "node scripts/test-go-worker.mjs",
     "build": "npm run build:native && cross-env BROWSERSLIST_IGNORE_OLD_DATA=1 tsc -b && cross-env BROWSERSLIST_IGNORE_OLD_DATA=1 vite build",
-    "dist": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --publish never",
-    "dist:win": "npm run generate:icons && npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win dir --publish never && npm run edit:win-exe && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis --prepackaged release/win-unpacked --publish never",
-    "dist:mac": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --publish never",
+    "dist": "npm run build && electron-builder --publish never",
+    "dist:win": "npm run generate:icons && npm run build && electron-builder --win nsis --publish never",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --publish never",
     "dist:linux": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux AppImage deb --publish never",
     "test": "vitest",
     "test:tor:live": "npm run build:native && node scripts/run-live-tor-e2e.mjs",
@@ -57,13 +56,13 @@
     "lucide-react": "^0.471.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-router-dom": "^7.1.5",
     "ws": "^8.21.0",
     "yjs": "^13.6.22",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.1",
+    "@electron/fuses": "^2.1.3",
+    "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.57.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",
@@ -72,17 +71,17 @@
     "autoprefixer": "^10.4.20",
     "cross-env": "^10.1.0",
     "electron": "^43.0.0",
-    "electron-builder": "^26.7.0",
-    "eslint": "^9.39.1",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9.39.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
     "playwright": "^1.57.0",
-    "postcss": "^8.4.49",
+    "postcss": "^8.5.23",
     "resedit-cli": "^3.1.0",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.9.3",
-    "typescript-eslint": "^8.46.4",
+    "typescript-eslint": "^8.65.0",
     "vite": "^7.2.4",
     "vite-plugin-electron": "^0.29.0",
     "vitest": "3.2.6"
@@ -91,6 +90,7 @@
     "appId": "com.nyukop.nkc",
     "productName": "NKC",
     "asar": true,
+    "afterPack": "scripts/afterPack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -124,7 +124,7 @@
     },
     "win": {
       "icon": "icon.ico",
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
       "target": [
         {
           "target": "nsis",
@@ -143,6 +143,8 @@
       "installerHeaderIcon": "build/icon.ico"
     },
     "mac": {
+      "hardenedRuntime": true,
+      "notarize": true,
       "target": [
         "dmg",
         "zip"

@@ -210,6 +210,73 @@ test.describe("Settings and media E2E", () => {
     await expect(enabled).toBeChecked();
   });
 
+  test("close behavior switches directly between tray and exit", async ({ page }) => {
+    await page.evaluate(() => {
+      type Prefs = {
+        login: { autoStartEnabled: boolean; startInTray: boolean; closeToTray: boolean; closeToExit: boolean };
+        background: { enabled: boolean; syncIntervalMinutes: 0 };
+        notifications: { enabled: boolean; hideContent: boolean };
+        deviceSync: { transportPolicy: "directOnly" };
+      };
+      type Patch = { [Key in keyof Prefs]?: Partial<Prefs[Key]> };
+      let prefs: Prefs = {
+        login: { autoStartEnabled: true, startInTray: false, closeToTray: true, closeToExit: false },
+        background: { enabled: true, syncIntervalMinutes: 0 },
+        notifications: { enabled: true, hideContent: true },
+        deviceSync: { transportPolicy: "directOnly" },
+      };
+      const root = globalThis as typeof globalThis & {
+        prefs?: { get: () => Promise<Prefs>; set: (patch: Patch) => Promise<Prefs> };
+      };
+      root.prefs = {
+        get: async () => prefs,
+        set: async (patch) => {
+          prefs = {
+            login: { ...prefs.login, ...(patch.login ?? {}) },
+            background: { ...prefs.background, ...(patch.background ?? {}) },
+            notifications: { ...prefs.notifications, ...(patch.notifications ?? {}) },
+            deviceSync: { ...prefs.deviceSync, ...(patch.deviceSync ?? {}) },
+          };
+          if (patch.login?.closeToExit) {
+            prefs.login.closeToTray = false;
+            prefs.background.enabled = false;
+          }
+          if (patch.login?.closeToTray) prefs.login.closeToExit = false;
+          return prefs;
+        },
+      };
+    });
+
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-login-button").click();
+
+    const tray = page.getByTestId("login-close-to-tray-switch");
+    const exit = page.getByTestId("login-close-to-exit-switch");
+    await expect(tray).toBeChecked();
+    await expect(exit).not.toBeChecked();
+    await expect(exit).toBeEnabled();
+
+    await page.getByTestId("login-close-to-exit-switch-control").click();
+    await expect(exit).toBeChecked();
+    await expect(tray).not.toBeChecked();
+    await expect(tray).toBeEnabled();
+
+    await page.getByTestId("login-close-to-tray-switch-control").click();
+    await expect(tray).toBeChecked();
+    await expect(exit).not.toBeChecked();
+  });
+
+  test("PIN lock switch opens the PIN editor with one click", async ({ page }) => {
+    await page.getByTestId("open-settings").click();
+    await page.getByTestId("settings-privacy-button").click();
+
+    const pinSwitch = page.getByTestId("privacy-pin-lock-switch");
+    await expect(pinSwitch).not.toBeChecked();
+    await page.getByTestId("privacy-pin-lock-switch-control").click();
+    await expect(pinSwitch).toBeChecked();
+    await expect(page.getByPlaceholder(/4-8/)).toBeVisible();
+  });
+
   test("sidebar tabs and quick theme selection persist", async ({ page }) => {
     await expect(page.getByTestId("sidebar-tabs")).toBeVisible();
     await page.getByRole("button", { name: "탭 숨기기" }).click();

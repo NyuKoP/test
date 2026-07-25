@@ -1,7 +1,15 @@
 ﻿import path from "node:path";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import electron from "vite-plugin-electron";
+
+const nativeWorkerName = process.platform === "win32" ? "nkc-worker.exe" : "nkc-worker";
+const nativeWorkerPath = path.resolve(__dirname, "native", "bin", nativeWorkerName);
+const nativeWorkerSha256 = fs.existsSync(nativeWorkerPath)
+  ? crypto.createHash("sha256").update(fs.readFileSync(nativeWorkerPath)).digest("hex")
+  : "";
 
 const electronMainBuild = {
   outDir: "dist-electron",
@@ -61,6 +69,9 @@ export default defineConfig({
           void startup(["."], { env });
         },
         vite: {
+          define: {
+            __NKC_NATIVE_WORKER_SHA256__: JSON.stringify(nativeWorkerSha256),
+          },
           build: {
             ...electronMainBuild,
           },

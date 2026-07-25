@@ -54,13 +54,13 @@ const fetchRendezvous = async (
   useOnionProxy: boolean,
   onOnionProxyFallback?: (detail: { url: string; reason: string }) => void
 ) => {
-  if (useOnionProxy) {
-    try {
-      return await onionFetch(url, init);
-    } catch (error) {
-      if (!isOnionUnavailableError(error)) {
-        throw error;
-      }
+  try {
+    return await onionFetch(url, init);
+  } catch (error) {
+    if (!isOnionUnavailableError(error)) {
+      throw error;
+    }
+    if (useOnionProxy) {
       onOnionProxyFallback?.({
         url,
         reason: toErrorMessage(error),

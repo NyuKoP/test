@@ -23,6 +23,7 @@ import {
   setPrivacyPrefs,
 } from "../security/preferences";
 import {
+  applyAppPrefsPatch,
   defaultAppPrefs,
   getAppPrefs,
   setAppPrefs,
@@ -363,11 +364,17 @@ export default function SettingsDialog({
   };
 
   const updateAppPrefs = useCallback(async (patch: AppPreferencesPatch) => {
+    setAppPrefsState((current) => applyAppPrefsPatch(current, patch));
     try {
       const next = await setAppPrefs(patch);
       setAppPrefsState(next);
     } catch (e) {
       console.error("Failed to save app prefs", e);
+      try {
+        setAppPrefsState(await getAppPrefs());
+      } catch {
+        // Keep the optimistic state when the bridge cannot be queried either.
+      }
     }
   }, []);
 
@@ -927,8 +934,6 @@ export default function SettingsDialog({
   const prefsDisabled = !prefsLoaded;
   const backgroundDisabled = !appPrefs.background.enabled || appPrefs.login.closeToExit;
   const notificationsDisabled = !appPrefs.notifications.enabled;
-  const closeToTrayDisabled = appPrefs.login.closeToExit;
-  const closeToExitDisabled = appPrefs.login.closeToTray;
 
   return (
     <>
@@ -1120,8 +1125,6 @@ export default function SettingsDialog({
               appPrefs={appPrefs}
               prefsDisabled={prefsDisabled}
               backgroundDisabled={backgroundDisabled}
-              closeToTrayDisabled={closeToTrayDisabled}
-              closeToExitDisabled={closeToExitDisabled}
               onUpdateAppPrefs={updateAppPrefs}
               onManualSync={() =>
                 void syncNow().catch((e) => console.error("Manual sync failed", e))

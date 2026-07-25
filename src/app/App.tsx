@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "../appRouter";
 import { useAppStore } from "./store";
 import Onboarding from "../components/Onboarding";
 import Unlock, { type UnlockResult } from "../components/Unlock";

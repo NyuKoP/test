@@ -44,9 +44,6 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Refresh Tor pins
-        run: npm run update:tor-pins
-
       - name: Build
         run: npm run build
 
@@ -60,20 +57,33 @@ jobs:
         if: runner.os == 'macOS'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: npx electron-builder --mac dmg zip --publish always
-
-      - name: Prepare Windows package
-        if: runner.os == 'Windows'
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
         run: |
-          npm run generate:icons
-          npx electron-builder --win dir --publish never
-          npm run edit:win-exe
+          test -n "$CSC_LINK" &&
+            test -n "$CSC_KEY_PASSWORD" &&
+            test -n "$APPLE_ID" &&
+            test -n "$APPLE_APP_SPECIFIC_PASSWORD" &&
+            test -n "$APPLE_TEAM_ID"
+          npx electron-builder --mac dmg zip --publish always
 
       - name: Publish Windows update
         if: runner.os == 'Windows'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: npx electron-builder --win nsis --prepackaged release/win-unpacked --publish always
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        shell: pwsh
+        run: |
+          if (-not $env:CSC_LINK -or -not $env:CSC_KEY_PASSWORD) {
+            throw "Windows code-signing secrets are required"
+          }
+          npm run generate:icons
+          npx electron-builder --win nsis --publish always
 
   finalize-release:
     needs: publish

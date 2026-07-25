@@ -1,8 +1,10 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   net,
+  protocol,
   session,
   Menu,
   Tray,
@@ -10,9 +12,10 @@ import {
 } from "electron";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import crypto from "node:crypto";
 import nodeNet from "node:net";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OnionComponentState, OnionNetwork } from "./net/netConfig";
 import { installTor } from "./main/onion/install/installTor";
 import { removeWithRetry } from "./main/onion/install/removeWithRetry";
@@ -40,10 +43,36 @@ import { createSafeConsole } from "./diagnostics/safeConsole";
 import { shouldUseDevRuntime } from "./main/runtimeMode";
 import { registerAppUpdaterIpc, scheduleInitialAppUpdateCheck } from "./main/appUpdater";
 
+declare const __NKC_NATIVE_WORKER_SHA256__: string;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "nkc-app",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+    },
+  },
+]);
+
 export { resetPreloadToken } from "./main/ipc/nativeWorkerIpc";
 export { loadKeyPair, saveKeyPair } from "./main/services/secretStore";
 
 const console = createSafeConsole(globalThis.console);
+
+const verifyNativeWorkerIntegrity = (executablePath: string) => {
+  const expected = __NKC_NATIVE_WORKER_SHA256__.trim().toLowerCase();
+  if (!expected || !/^[a-f0-9]{64}$/.test(expected)) {
+    throw new Error("native_worker_integrity_pin_missing");
+  }
+  const actual = crypto
+    .createHash("sha256")
+    .update(fsSync.readFileSync(executablePath))
+    .digest("hex");
+  if (actual !== expected) throw new Error("native_worker_integrity_mismatch");
+};
 
 type ProxyApplyPayload = {
   proxyUrl: string;
@@ -70,6 +99,116 @@ type OnionFetchResponse = {
   headers: Record<string, string>;
   bodyBase64: string;
   error?: string;
+};
+
+const MAX_ONION_FETCH_BODY_BASE64_BYTES = 2 * 1024 * 1024;
+const MAX_ONION_FETCH_HEADER_COUNT = 32;
+const MAX_ONION_FETCH_HEADER_VALUE_BYTES = 8 * 1024;
+const ALLOWED_ONION_FETCH_METHODS = new Set(["GET", "POST", "PUT"]);
+const BLOCKED_FORWARD_HEADERS = new Set([
+  "connection",
+  "cookie",
+  "host",
+  "origin",
+  "proxy-authorization",
+  "proxy-connection",
+  "referer",
+  "transfer-encoding",
+  "upgrade",
+]);
+const DEFAULT_APPROVED_FETCH_ORIGINS = new Set(["https://rendezvous.nkc.im"]);
+let approvedFetchOrigins = new Set(DEFAULT_APPROVED_FETCH_ORIGINS);
+
+const approvedFetchOriginsPath = () =>
+  path.join(app.getPath("userData"), "approved-network-origins.json");
+
+const normalizeApprovableOrigin = (value: string) => {
+  const parsed = new URL(value);
+  if (parsed.username || parsed.password) throw new Error("credentials-in-url-blocked");
+  const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  const isOnion = hostname.endsWith(".onion");
+  if (isOnion && (parsed.protocol === "http:" || parsed.protocol === "https:")) {
+    return { origin: parsed.origin, isOnion: true };
+  }
+  if (parsed.protocol !== "https:") throw new Error("https-required");
+  if (isBlockedNetworkHost(hostname)) throw new Error("private-network-origin-blocked");
+  return { origin: parsed.origin, isOnion: false };
+};
+
+const loadApprovedFetchOrigins = async () => {
+  approvedFetchOrigins = new Set(DEFAULT_APPROVED_FETCH_ORIGINS);
+  try {
+    const raw = await fs.readFile(approvedFetchOriginsPath(), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    for (const candidate of parsed) {
+      if (typeof candidate !== "string") continue;
+      try {
+        const normalized = normalizeApprovableOrigin(candidate);
+        if (!normalized.isOnion) approvedFetchOrigins.add(normalized.origin);
+      } catch {
+        // Ignore invalid or obsolete entries.
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      console.warn("[security] failed to read approved network origins");
+    }
+  }
+};
+
+const persistApprovedFetchOrigins = async () => {
+  const target = approvedFetchOriginsPath();
+  const temporary = `${target}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify([...approvedFetchOrigins].sort()), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.rename(temporary, target);
+  await fs.chmod(target, 0o600).catch(() => undefined);
+};
+
+const isApprovedOnionFetchUrl = (value: string) => {
+  try {
+    const normalized = normalizeApprovableOrigin(value);
+    return normalized.isOnion || approvedFetchOrigins.has(normalized.origin);
+  } catch {
+    return false;
+  }
+};
+
+const validateOnionFetchRequest = (req: OnionFetchRequest) => {
+  if (!req || typeof req.url !== "string" || typeof req.method !== "string") {
+    throw new Error("invalid-request");
+  }
+  if (!isApprovedOnionFetchUrl(req.url)) throw new Error("blocked-url");
+  const method = req.method.toUpperCase();
+  if (!ALLOWED_ONION_FETCH_METHODS.has(method)) throw new Error("blocked-method");
+  if ((req.bodyBase64?.length ?? 0) > MAX_ONION_FETCH_BODY_BASE64_BYTES) {
+    throw new Error("request-body-too-large");
+  }
+  if (
+    req.timeoutMs !== undefined &&
+    (!Number.isFinite(req.timeoutMs) || req.timeoutMs < 1 || req.timeoutMs > 30_000)
+  ) {
+    throw new Error("invalid-timeout");
+  }
+  const headers = req.headers ?? {};
+  const entries = Object.entries(headers);
+  if (entries.length > MAX_ONION_FETCH_HEADER_COUNT) throw new Error("too-many-headers");
+  for (const [name, value] of entries) {
+    const normalizedName = name.trim().toLowerCase();
+    if (
+      !/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(normalizedName) ||
+      BLOCKED_FORWARD_HEADERS.has(normalizedName) ||
+      typeof value !== "string" ||
+      Buffer.byteLength(value, "utf8") > MAX_ONION_FETCH_HEADER_VALUE_BYTES ||
+      /[\r\n]/.test(value)
+    ) {
+      throw new Error("invalid-header");
+    }
+  }
+  return { ...req, method, headers };
 };
 
 type OnionControllerFetchRequest = {
@@ -115,8 +254,12 @@ const isTrustedRendererUrl = (url: string) => {
   try {
     const parsed = new URL(url);
     if (parsed.protocol === "file:") {
+      if (!isDev) return false;
       const expectedPath = path.resolve(__dirname, "../dist/index.html");
       return path.resolve(fileURLToPath(parsed)) === expectedPath;
+    }
+    if (!isDev && parsed.protocol === "nkc-app:") {
+      return parsed.host === "bundle" && parsed.pathname === "/index.html";
     }
     if (!isDev || !rendererUrl) return false;
     return parsed.origin === new URL(rendererUrl).origin;
@@ -133,20 +276,6 @@ const isBlockedNetworkHost = (hostname: string) => {
   if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return true;
   if (/^169\.254\./.test(normalized) || /^fc/i.test(normalized) || /^fd/i.test(normalized)) return true;
   return false;
-};
-
-const isSafeRemoteHttpUrl = (value: string) => {
-  try {
-    const parsed = new URL(value);
-    return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      !parsed.username &&
-      !parsed.password &&
-      !isBlockedNetworkHost(parsed.hostname)
-    );
-  } catch {
-    return false;
-  }
 };
 
 const isAllowedLocalSocksUrl = (value: string) => {
@@ -212,6 +341,10 @@ let onionSession: Electron.Session | null = null;
 const getOnionSession = () => {
   if (!onionSession) {
     onionSession = session.fromPartition("persist:nkc-onion-fetch");
+    onionSession.setPermissionCheckHandler(() => false);
+    onionSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false);
+    });
   }
   return onionSession;
 };
@@ -491,39 +624,61 @@ const fetchViaNetFetch = async (req: OnionFetchRequest): Promise<OnionFetchRespo
 const registerOnionFetchIpc = () => {
   ipcMain.handle("nkc:setOnionProxy", async (event, proxyUrl: string | null) => {
     assertTrustedIpcSender(event);
+    if (proxyUrl !== null && (!proxyUrl.trim() || !isAllowedLocalSocksUrl(proxyUrl))) {
+      throw new Error("Blocked non-local SOCKS proxy URL");
+    }
     await setOnionProxy(proxyUrl);
     return { ok: true };
   });
+  ipcMain.handle("nkc:authorizeOnionFetchOrigin", async (event, value: string) => {
+    assertTrustedIpcSender(event);
+    if (typeof value !== "string") return { ok: false, error: "invalid-origin" };
+    let normalized: { origin: string; isOnion: boolean };
+    try {
+      normalized = normalizeApprovableOrigin(value);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "invalid-origin" };
+    }
+    if (normalized.isOnion || approvedFetchOrigins.has(normalized.origin)) {
+      return { ok: true, origin: normalized.origin };
+    }
+    const parent = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.MessageBoxOptions = {
+      type: "warning",
+      buttons: ["Cancel", "Allow"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+      title: "Allow custom network server",
+      message: `Allow NKC to send encrypted rendezvous traffic to ${normalized.origin}?`,
+      detail: "Only approve a server you operate or explicitly trust.",
+    };
+    const result = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    if (result.response !== 1) return { ok: false, error: "origin-not-approved" };
+    approvedFetchOrigins.add(normalized.origin);
+    await persistApprovedFetchOrigins();
+    return { ok: true, origin: normalized.origin };
+  });
   ipcMain.handle("nkc:onionFetch", async (event, req: OnionFetchRequest) => {
     assertTrustedIpcSender(event);
-    if (
-      !req ||
-      typeof req.url !== "string" ||
-      !req.url ||
-      typeof req.method !== "string" ||
-      !req.method
-    ) {
+    let validated: OnionFetchRequest;
+    try {
+      validated = validateOnionFetchRequest(req);
+    } catch (error) {
       return {
         ok: false,
         status: 0,
         headers: {},
         bodyBase64: "",
-        error: "invalid-request",
-      } satisfies OnionFetchResponse;
-    }
-    if (!isSafeRemoteHttpUrl(req.url)) {
-      return {
-        ok: false,
-        status: 0,
-        headers: {},
-        bodyBase64: "",
-        error: "blocked-url",
+        error: error instanceof Error ? error.message : "invalid-request",
       } satisfies OnionFetchResponse;
     }
     if (typeof net.fetch === "function") {
-      return fetchViaNetFetch(req);
+      return fetchViaNetFetch(validated);
     }
-    return fetchViaNetRequest(req);
+    return fetchViaNetRequest(validated);
   });
 };
 
@@ -1574,7 +1729,6 @@ export const createMainWindow = () => {
   if (isDev && !preloadExists) {
     console.error("[dev] preload missing at", preloadPath);
   }
-  const sandboxEnabled = !(isDev && process.env.ELECTRON_DEV_NO_SANDBOX === "1");
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -1584,12 +1738,16 @@ export const createMainWindow = () => {
       preload: preloadExists ? preloadPath : undefined,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: sandboxEnabled,
+      sandbox: true,
+      webSecurity: true,
       allowRunningInsecureContent: false,
     },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl)) event.preventDefault();
+  });
+  win.webContents.on("will-redirect", (event, navigationUrl) => {
     if (!isTrustedRendererUrl(navigationUrl)) event.preventDefault();
   });
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
@@ -1639,7 +1797,7 @@ export const createMainWindow = () => {
       void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
       return;
     }
-    void win.loadFile(path.join(__dirname, "../dist/index.html"));
+    void win.loadURL("nkc-app://bundle/index.html");
   };
   void loadRenderer();
   win.once("ready-to-show", () => {
@@ -1701,6 +1859,27 @@ app.whenReady().then(async () => {
   if (isDev) {
     console.log("[main] VITE_DEV_SERVER_URL =", process.env.VITE_DEV_SERVER_URL ?? "");
   }
+  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  const rendererRoot = path.resolve(__dirname, "../dist");
+  protocol.handle("nkc-app", (request) => {
+    const requestUrl = new URL(request.url);
+    if (requestUrl.host !== "bundle") return new Response("Not found", { status: 404 });
+    let relativePath: string;
+    try {
+      relativePath = decodeURIComponent(requestUrl.pathname).replace(/^[/\\]+/, "");
+    } catch {
+      return new Response("Bad request", { status: 400 });
+    }
+    const candidate = path.resolve(rendererRoot, relativePath);
+    if (candidate !== rendererRoot && !candidate.startsWith(`${rendererRoot}${path.sep}`)) {
+      return new Response("Forbidden", { status: 403 });
+    }
+    return net.fetch(pathToFileURL(candidate).toString());
+  });
+  await loadApprovedFetchOrigins();
   backgroundService = new BackgroundService();
   registerProxyIpc();
   registerOnionFetchIpc();
@@ -1729,10 +1908,13 @@ app.whenReady().then(async () => {
     try {
       const executableName = process.platform === "win32" ? "nkc-worker.exe" : "nkc-worker";
       const executablePath =
-        process.env.NKC_GO_WORKER_PATH ||
+        (!app.isPackaged ? process.env.NKC_GO_WORKER_PATH : undefined) ||
         (app.isPackaged
           ? path.join(process.resourcesPath, "native", executableName)
           : path.join(process.cwd(), "native", "bin", executableName));
+      if (app.isPackaged || !process.env.NKC_GO_WORKER_PATH) {
+        verifyNativeWorkerIntegrity(executablePath);
+      }
       const client = new NativeWorkerClient(executablePath);
       await client.start();
       const nativeQueue = await NativeOfflineQueueManager.create(

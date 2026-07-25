@@ -66,8 +66,18 @@ export const SETTINGS_ROUTES: SettingsRoute[] = [
     testId: "settings-network-button",
   },
   { key: "settings.devices", view: "devices", label: { ko: "기기/동기화", en: "Devices / Sync" } },
-  { key: "settings.privacy", view: "privacy", label: { ko: "보안 / 개인정보", en: "Security / Privacy" } },
-  { key: "settings.login", view: "login", label: { ko: "로그인", en: "Login" } },
+  {
+    key: "settings.privacy",
+    view: "privacy",
+    label: { ko: "보안 / 개인정보", en: "Security / Privacy" },
+    testId: "settings-privacy-button",
+  },
+  {
+    key: "settings.login",
+    view: "login",
+    label: { ko: "로그인", en: "Login" },
+    testId: "settings-login-button",
+  },
   {
     key: "settings.theme",
     view: "theme",

@@ -65,8 +65,25 @@ export const getRendezvousBaseUrl = async () => {
 };
 
 export const setRendezvousBaseUrl = async (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed) {
+    const bridge = (
+      globalThis as {
+        nkc?: {
+          authorizeOnionFetchOrigin?: (
+            url: string
+          ) => Promise<{ ok: boolean; error?: string }>;
+        };
+      }
+    ).nkc;
+    if (!bridge?.authorizeOnionFetchOrigin) {
+      throw new Error("Network origin approval is unavailable");
+    }
+    const approval = await bridge.authorizeOnionFetchOrigin(trimmed);
+    if (!approval.ok) throw new Error(approval.error ?? "Network origin was not approved");
+  }
   const store = getPublicStore();
-  await store.set(RENDEZVOUS_BASE_URL_KEY, value);
+  await store.set(RENDEZVOUS_BASE_URL_KEY, trimmed);
 };
 
 export const getRendezvousUseOnion = async () => {

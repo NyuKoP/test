@@ -81,6 +81,28 @@ export const normalizePrefs = (input?: Partial<AppPreferences> | null): AppPrefe
   return merged;
 };
 
+export const applyAppPrefsPatch = (
+  current: AppPreferences,
+  patch: AppPreferencesPatch
+): AppPreferences => {
+  const next = {
+    ...current,
+    login: { ...current.login, ...(patch.login ?? {}) },
+    background: { ...current.background, ...(patch.background ?? {}) },
+    notifications: { ...current.notifications, ...(patch.notifications ?? {}) },
+    deviceSync: { ...current.deviceSync, ...(patch.deviceSync ?? {}) },
+  };
+
+  if (patch.login?.closeToTray === true) {
+    next.login.closeToExit = false;
+  }
+  if (patch.login?.closeToExit === true) {
+    next.login.closeToTray = false;
+  }
+
+  return normalizePrefs(next);
+};
+
 type PrefsBridge = {
   get: () => Promise<AppPreferences>;
   set: (patch: AppPreferencesPatch) => Promise<AppPreferences>;

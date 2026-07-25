@@ -16,6 +16,13 @@ const SECRET_STORE_PREFIXES = [
   "nkc_ratchet_v1:",
   "nkc_ratchet_v2:",
 ];
+let pendingWrite: Promise<void> = Promise.resolve();
+
+const isSecureStorageBackendAvailable = () => {
+  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (process.platform !== "linux") return true;
+  return safeStorage.getSelectedStorageBackend() !== "basic_text";
+};
 
 export const isAllowedSecretStoreKey = (key: unknown): key is string =>
   typeof key === "string" &&
@@ -42,12 +49,21 @@ const readSecretStore = async () => {
 
 const writeSecretStore = async (payload: Record<string, string>) => {
   const filePath = path.join(app.getPath("userData"), SECRET_STORE_FILENAME);
-  await fs.writeFile(filePath, JSON.stringify(payload), "utf8");
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  pendingWrite = pendingWrite.catch(() => undefined).then(async () => {
+    await fs.writeFile(temporaryPath, JSON.stringify(payload), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await fs.rename(temporaryPath, filePath);
+    await fs.chmod(filePath, 0o600).catch(() => undefined);
+  });
+  await pendingWrite;
 };
 
 export const saveKeyPair = async (key: string, value: string) => {
   if (!isAllowedSecretStoreKey(key) || typeof value !== "string") return false;
-  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (!isSecureStorageBackendAvailable()) return false;
   const data = await readSecretStore();
   data[key] = safeStorage.encryptString(value).toString("base64");
   await writeSecretStore(data);
@@ -56,7 +72,7 @@ export const saveKeyPair = async (key: string, value: string) => {
 
 export const loadKeyPair = async (key: string) => {
   if (!isAllowedSecretStoreKey(key)) return null;
-  if (!safeStorage.isEncryptionAvailable()) return null;
+  if (!isSecureStorageBackendAvailable()) return null;
   const data = await readSecretStore();
   const entry = data[key];
   if (!entry) return null;
@@ -69,7 +85,7 @@ export const loadKeyPair = async (key: string) => {
 
 export const removeKeyPair = async (key: string) => {
   if (!isAllowedSecretStoreKey(key)) return false;
-  if (!safeStorage.isEncryptionAvailable()) return false;
+  if (!isSecureStorageBackendAvailable()) return false;
   const data = await readSecretStore();
   if (key in data) {
     delete data[key];
@@ -78,4 +94,4 @@ export const removeKeyPair = async (key: string) => {
   return true;
 };
 
-export const isSecretStoreAvailable = () => safeStorage.isEncryptionAvailable();
+export const isSecretStoreAvailable = () => isSecureStorageBackendAvailable();

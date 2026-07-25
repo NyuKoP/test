@@ -13,7 +13,10 @@ NKC is a serverless, end-to-end encrypted desktop chat application built with El
 - Encrypted local storage backed by IndexedDB
 - Friend codes, device pairing, and primary/secondary device roles
 - Onion-first routing, Tor hidden-service support, and optional direct fallback
-- Electron main/preload isolation with a narrow IPC bridge
+- Electron main/preload isolation with a narrow, validated IPC bridge
+- Sandboxed `nkc-app://` renderer loading, restricted permissions, and Electron Fuses
+- Approved-origin controls for custom rendezvous servers
+- Native worker integrity verification in packaged applications
 - Native Go worker for SOCKS5/HTTP transport, connection pooling, offline queue, scheduling, and file operations
 - Bounded-memory file transfer up to 500 MiB with 1 MiB encrypted chunks
 
@@ -109,9 +112,16 @@ npm run dist:mac    # macOS DMG and ZIP
 npm run dist:linux  # Linux AppImage and DEB
 ```
 
-Artifacts are written to `release/`. Build each platform's installer on that platform. Code signing and notarization are not currently configured, so unsigned packages may trigger operating-system warnings.
+Artifacts are written to `release/`. Build each platform's installer on that platform.
 
-The Windows command deterministically generates `build/icon.png` and `build/icon.ico`, packages the unpacked application, applies the NKC icon and version metadata with `resedit-cli`, and then creates the NSIS installer. This avoids requiring Windows Developer Mode merely to unpack cross-platform signing-tool archives. It does not replace Authenticode signing; a trusted code-signing certificate is still required for signed public releases.
+The local `dist:*` commands are for development validation and do not publish artifacts. Public
+release artifacts must be produced by the tag-triggered GitHub Actions release workflow. That
+workflow requires Windows Authenticode credentials and macOS Developer ID, hardened-runtime, and
+notarization credentials; it fails closed when they are unavailable.
+
+Electron Fuses are applied after packaging to disable Run-as-Node, Node option injection, CLI
+inspection, and extra `file://` privileges while enforcing ASAR integrity. See
+[Release Security](RELEASE-SECURITY.md) for required secrets and release verification.
 
 ## Configuration
 
@@ -127,10 +137,16 @@ Common development and runtime environment variables include:
 | `VITE_RENDEZVOUS_BASE_URL` | Rendezvous signaling endpoint override |
 | `VITE_RENDEZVOUS_USE_ONION` | Enables onion-proxied rendezvous signaling |
 | `VITE_INFO_COLLECTION_LOGS` | Enables diagnostic information-collection logs |
-| `ELECTRON_DEV_NO_SANDBOX` | Disables the Electron sandbox in development only |
 | `OPEN_DEV_TOOLS` | Opens Electron developer tools at startup |
 
 Do not commit secrets, private keys, start keys, friend codes, bridge credentials, or local runtime data.
+
+Custom rendezvous origins require explicit approval in the packaged application. Non-Onion
+origins must use HTTPS and cannot resolve to loopback, link-local, or private-network addresses.
+
+Login settings store the close behavior as a mutually exclusive choice: selecting **Exit**
+disables hide-to-tray and background operation, while selecting **Hide to tray** disables Exit.
+Preference writes are serialized so rapid setting changes are persisted in order.
 
 ## Repository Layout
 
@@ -156,6 +172,8 @@ Start with the [documentation index](docs/README.md). Important references inclu
 - [Large File Transfer](docs/LARGE-FILE-TRANSFER.md)
 - [File Transfer Crypto Optimization](docs/CRYPTO-TRANSFER-OPTIMIZATION.md)
 - [Transport Security Invariants](docs/SECURITY-transport-invariants.md)
+- [Release Security](RELEASE-SECURITY.md)
+- [Security Policy](SECURITY.md)
 - [Two-Device Manual Checklist](docs/manual-two-device-checklist.md)
 - [Phase 4.6 Operations](docs/phase46-operations.md)
 - [Contributing Guide](CONTRIBUTING.md)

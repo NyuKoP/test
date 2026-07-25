@@ -14,8 +14,6 @@ type LoginSettingsProps = {
   appPrefs: AppPreferences;
   prefsDisabled: boolean;
   backgroundDisabled: boolean;
-  closeToTrayDisabled: boolean;
-  closeToExitDisabled: boolean;
   onUpdateAppPrefs: (patch: AppPreferencesPatch) => void | Promise<void>;
   onManualSync: () => void;
 };
@@ -26,8 +24,6 @@ export default function LoginSettings({
   appPrefs,
   prefsDisabled,
   backgroundDisabled,
-  closeToTrayDisabled,
-  closeToExitDisabled,
   onUpdateAppPrefs,
   onManualSync,
 }: LoginSettingsProps) {
@@ -102,7 +98,8 @@ export default function LoginSettings({
             <ToggleSwitch
               label={t("닫기(X) = 트레이로 숨김", "Close (X) = Hide to tray")}
               checked={appPrefs.login.closeToTray}
-              disabled={prefsDisabled || closeToTrayDisabled}
+              disabled={prefsDisabled}
+              testId="login-close-to-tray-switch"
               onChange={(checked) =>
                 void onUpdateAppPrefs({
                   login: { closeToTray: checked },
@@ -123,7 +120,8 @@ export default function LoginSettings({
             <ToggleSwitch
               label={t("닫기(X) = 종료", "Close (X) = Exit")}
               checked={appPrefs.login.closeToExit}
-              disabled={prefsDisabled || closeToExitDisabled}
+              disabled={prefsDisabled}
+              testId="login-close-to-exit-switch"
               onChange={(checked) =>
                 void onUpdateAppPrefs({
                   login: { closeToExit: checked },

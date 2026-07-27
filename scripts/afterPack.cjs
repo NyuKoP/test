@@ -5,22 +5,27 @@ const {
   flipFuses,
 } = require("@electron/fuses");
 
+const resolveElectronExecutablePath = (context) => {
+  const productFilename = context.packager.appInfo.productFilename;
+  if (context.electronPlatformName === "darwin") {
+    return path.join(
+      context.appOutDir,
+      `${productFilename}.app`,
+      "Contents",
+      "MacOS",
+      productFilename
+    );
+  }
+  if (context.electronPlatformName === "linux") {
+    return path.join(context.appOutDir, context.packager.executableName);
+  }
+  return path.join(context.appOutDir, `${productFilename}.exe`);
+};
+
+exports.resolveElectronExecutablePath = resolveElectronExecutablePath;
+
 exports.default = async function afterPack(context) {
-  const executableName =
-    context.electronPlatformName === "darwin"
-      ? context.packager.appInfo.productFilename
-      : context.packager.appInfo.productFilename +
-        (context.electronPlatformName === "win32" ? ".exe" : "");
-  const executablePath =
-    context.electronPlatformName === "darwin"
-      ? path.join(
-          context.appOutDir,
-          `${context.packager.appInfo.productFilename}.app`,
-          "Contents",
-          "MacOS",
-          executableName
-        )
-      : path.join(context.appOutDir, executableName);
+  const executablePath = resolveElectronExecutablePath(context);
 
   await flipFuses(executablePath, {
     version: FuseVersion.V1,

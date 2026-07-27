@@ -101,6 +101,7 @@ const postJson = async (url: string, payload: unknown, authToken?: string) => {
 const sendOverTor = async (
   sender: OnionControllerHandle,
   recipientOnion: string,
+  recipientInboxWriteToken: string,
   fromDeviceId: string,
   toDeviceId: string,
   envelope: string
@@ -115,7 +116,11 @@ const sendOverTor = async (
         fromDeviceId,
         toOnion: recipientOnion,
         envelope,
-        route: { mode: "manual", torOnion: recipientOnion },
+        route: {
+          mode: "manual",
+          torOnion: recipientOnion,
+          inboxWriteToken: recipientInboxWriteToken,
+        },
       },
       sender.authToken
     );
@@ -138,13 +143,19 @@ const sendOverTor = async (
 const readInbox = async (
   controller: OnionControllerHandle,
   deviceId: string,
+  mailboxToken: string,
   after: string | null = null
 ) => {
   const params = new URLSearchParams({ deviceId });
   if (after) params.set("after", after);
   const response = await fetch(
     `${controller.baseUrl}/onion/inbox?${params}`,
-    { headers: { "X-NKC-Controller-Token": controller.authToken } }
+    {
+      headers: {
+        "X-NKC-Controller-Token": controller.authToken,
+        "X-NKC-Mailbox-Token": mailboxToken,
+      },
+    }
   );
   expect(response.status).toBe(200);
   return (await response.json()) as InboxResponse;
@@ -153,10 +164,14 @@ const readInbox = async (
 const requireFriendCode = (code: string) => {
   const decoded = decodeFriendCodeV1(code);
   if ("error" in decoded) throw new Error(decoded.error);
-  if (!decoded.deviceId || !decoded.onionAddr) {
+  if (!decoded.deviceId || !decoded.onionAddr || !decoded.inboxWriteToken) {
     throw new Error("Friend code is missing Tor routing metadata");
   }
-  return decoded as FriendCodeV1 & { deviceId: string; onionAddr: string };
+  return decoded as FriendCodeV1 & {
+    deviceId: string;
+    onionAddr: string;
+    inboxWriteToken: string;
+  };
 };
 
 describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
@@ -173,6 +188,8 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
   let onionB: string;
   let friendCodeA: string;
   let friendCodeB: string;
+  let mailboxTokenA: string;
+  let mailboxTokenB: string;
   let identityPrivA: Uint8Array;
   let identityPrivB: Uint8Array;
   let dhPrivA: Uint8Array;
@@ -207,6 +224,18 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       getTorStatus: () => torB.getStatus(),
       socksTransport,
     });
+    const [mailboxA, mailboxB] = await Promise.all([
+      controllerA.registerMailbox(DEVICE_A),
+      controllerB.registerMailbox(DEVICE_B),
+    ]);
+    if (!mailboxA.ok || !mailboxA.inboxWriteToken) {
+      throw new Error(`Failed to register mailbox A: ${mailboxA.error ?? "missing-token"}`);
+    }
+    if (!mailboxB.ok || !mailboxB.inboxWriteToken) {
+      throw new Error(`Failed to register mailbox B: ${mailboxB.error ?? "missing-token"}`);
+    }
+    mailboxTokenA = mailboxA.inboxWriteToken;
+    mailboxTokenB = mailboxB.inboxWriteToken;
 
     // Start sequentially so each manager observes the SOCKS port held by the previous instance.
     const serviceA = await torA.ensureHiddenService({ localPort: controllerA.port, virtPort: 80 });
@@ -300,6 +329,7 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       dhPub: encodeBase64Url(dhA.publicKey),
       deviceId: DEVICE_A,
       onionAddr: onionA,
+      inboxWriteToken: mailboxTokenA,
     });
     friendCodeB = encodeFriendCodeV1({
       v: 1,
@@ -307,6 +337,7 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       dhPub: encodeBase64Url(dhB.publicKey),
       deviceId: DEVICE_B,
       onionAddr: onionB,
+      inboxWriteToken: mailboxTokenB,
     });
   }, LIVE_TOR_LARGE_ENABLED ? 660_000 : 360_000);
 
@@ -371,11 +402,12 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       await sendOverTor(
         controllerA,
         bob.onionAddr,
+        bob.inboxWriteToken,
         alice.deviceId,
         bob.deviceId,
         JSON.stringify(friendRequest)
       );
-      const requestInbox = await readInbox(controllerB, bob.deviceId);
+      const requestInbox = await readInbox(controllerB, bob.deviceId, bob.inboxWriteToken);
       const receivedRequest = JSON.parse(
         requestInbox.items.at(-1)?.envelope ?? "null"
       ) as FriendControlFrame;
@@ -419,11 +451,12 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       await sendOverTor(
         controllerB,
         alice.onionAddr,
+        alice.inboxWriteToken,
         bob.deviceId,
         alice.deviceId,
         JSON.stringify(friendAccept)
       );
-      const acceptInbox = await readInbox(controllerA, alice.deviceId);
+      const acceptInbox = await readInbox(controllerA, alice.deviceId, alice.inboxWriteToken);
       const receivedAccept = JSON.parse(
         acceptInbox.items.at(-1)?.envelope ?? "null"
       ) as FriendControlFrame;
@@ -452,13 +485,14 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       await sendOverTor(
         controllerA,
         bob.onionAddr,
+        bob.inboxWriteToken,
         alice.deviceId,
         bob.deviceId,
         fileEnvelope
       );
       const fileTransferMs = Date.now() - fileStartedAt;
 
-      const inboxB = await readInbox(controllerB, bob.deviceId);
+      const inboxB = await readInbox(controllerB, bob.deviceId, bob.inboxWriteToken);
       const receivedFile = JSON.parse(inboxB.items.at(-1)?.envelope ?? "null") as {
         type?: string;
         bytesBase64?: string;
@@ -486,13 +520,14 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       await sendOverTor(
         controllerB,
         alice.onionAddr,
+        alice.inboxWriteToken,
         bob.deviceId,
         alice.deviceId,
         chatEnvelope
       );
       const chatTransferMs = Date.now() - chatStartedAt;
 
-      const inboxA = await readInbox(controllerA, alice.deviceId);
+      const inboxA = await readInbox(controllerA, alice.deviceId, alice.inboxWriteToken);
       expect(inboxA.items.at(-1)).toMatchObject({ from: bob.deviceId, envelope: chatEnvelope });
       const receivedChat = JSON.parse(inboxA.items.at(-1)?.envelope ?? "null") as { text?: string };
       expect(createHash("sha256").update(receivedChat.text ?? "").digest("hex")).toBe(chatSha256);
@@ -540,8 +575,12 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
       const receivedEventIds = new Set<string>();
       let duplicateDeliveries = 0;
       let receivedBytes = 0;
-      let inboxBCursor = (await readInbox(controllerB, bob.deviceId)).nextAfter;
-      let inboxACursor = (await readInbox(controllerA, alice.deviceId)).nextAfter;
+      let inboxBCursor = (
+        await readInbox(controllerB, bob.deviceId, bob.inboxWriteToken)
+      ).nextAfter;
+      let inboxACursor = (
+        await readInbox(controllerA, alice.deviceId, alice.inboxWriteToken)
+      ).nextAfter;
       let interruptionVerified = false;
       let chatTransferMs = 0;
 
@@ -603,12 +642,18 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
             await sendOverTor(
               controllerB,
               alice.onionAddr,
+              alice.inboxWriteToken,
               bob.deviceId,
               alice.deviceId,
               chatEnvelope
             );
             chatTransferMs = Date.now() - chatStartedAt;
-            const chatInbox = await readInbox(controllerA, alice.deviceId, inboxACursor);
+            const chatInbox = await readInbox(
+              controllerA,
+              alice.deviceId,
+              alice.inboxWriteToken,
+              inboxACursor
+            );
             inboxACursor = chatInbox.nextAfter;
             expect(chatInbox.items.at(-1)?.envelope).toBe(chatEnvelope);
 
@@ -620,7 +665,11 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
                 fromDeviceId: alice.deviceId,
                 toOnion: bob.onionAddr,
                 envelope,
-                route: { mode: "manual", torOnion: bob.onionAddr },
+                route: {
+                  mode: "manual",
+                  torOnion: bob.onionAddr,
+                  inboxWriteToken: bob.inboxWriteToken,
+                },
               },
               controllerA.authToken
             );
@@ -643,6 +692,7 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
             await sendOverTor(
               controllerA,
               bob.onionAddr,
+              bob.inboxWriteToken,
               alice.deviceId,
               bob.deviceId,
               envelope
@@ -654,7 +704,12 @@ describe.runIf(LIVE_TOR_ENABLED)("live Tor bidirectional transfer", () => {
         const receivedByIndex = new Map<number, Buffer>();
         const receiveDeadline = Date.now() + 60_000;
         while (receivedByIndex.size < outgoing.length && Date.now() < receiveDeadline) {
-          const inbox = await readInbox(controllerB, bob.deviceId, inboxBCursor);
+          const inbox = await readInbox(
+            controllerB,
+            bob.deviceId,
+            bob.inboxWriteToken,
+            inboxBCursor
+          );
           inboxBCursor = inbox.nextAfter;
           for (const item of inbox.items) {
             const receivedEnvelope = JSON.parse(item.envelope) as Envelope;

@@ -59,6 +59,12 @@ contextBridge.exposeInMainWorld("nkc", {
     ipcRenderer.invoke("nkc:setOnionProxy", proxyUrl) as Promise<unknown>,
   getOnionControllerUrl: () =>
     ipcRenderer.invoke("nkc:getOnionControllerUrl") as Promise<string>,
+  registerOnionMailbox: (deviceId: string) =>
+    ipcRenderer.invoke("nkc:registerOnionMailbox", deviceId) as Promise<{
+      ok: boolean;
+      inboxWriteToken?: string;
+      error?: string;
+    }>,
   setOnionForwardProxy: (proxyUrl: string | null) =>
     ipcRenderer.invoke("nkc:setOnionForwardProxy", proxyUrl) as Promise<{ ok: boolean }>,
   onionControllerFetch: (req: {

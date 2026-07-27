@@ -19,10 +19,10 @@ export const looksLikeIpOrIce = (value: string) =>
   ipv4TestPattern.test(value) || ipv6TestPattern.test(value) || iceTestPattern.test(value);
 
 export const sanitizeRoutingHints = (
-  hints?: { onionAddr?: string; deviceId?: string }
+  hints?: { onionAddr?: string; deviceId?: string; inboxWriteToken?: string }
 ) => {
   if (!hints) return undefined;
-  const next: { onionAddr?: string; deviceId?: string } = {};
+  const next: { onionAddr?: string; deviceId?: string; inboxWriteToken?: string } = {};
   const onionAddr = hints.onionAddr?.trim().toLowerCase();
   if (onionAddr && onionV3Pattern.test(onionAddr) && !looksLikeIpOrIce(onionAddr)) {
     next.onionAddr = onionAddr;
@@ -33,6 +33,12 @@ export const sanitizeRoutingHints = (
     if (uuidPattern.test(hints.deviceId)) {
       next.deviceId = hints.deviceId;
     }
+  }
+  if (
+    typeof hints.inboxWriteToken === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(hints.inboxWriteToken)
+  ) {
+    next.inboxWriteToken = hints.inboxWriteToken;
   }
   return Object.keys(next).length ? next : undefined;
 };

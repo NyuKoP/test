@@ -1,5 +1,14 @@
 import { execFile } from "node:child_process";
 
+export const buildWindowsExpandArchiveArgs = (archivePath: string, destDir: string) => [
+  "-NoProfile",
+  "-NonInteractive",
+  "-Command",
+  "& { param($archive, $destination) Expand-Archive -Force -LiteralPath $archive -DestinationPath $destination }",
+  archivePath,
+  destDir,
+];
+
 export const unpackArchive = async (archivePath: string, destDir: string) => {
   const lowerPath = archivePath.toLowerCase();
   const run = async (cmd: string, args: string[]) => {
@@ -26,11 +35,7 @@ export const unpackArchive = async (archivePath: string, destDir: string) => {
 
   if (lowerPath.endsWith(".zip")) {
     if (process.platform === "win32") {
-      await run("powershell", [
-        "-NoProfile",
-        "-Command",
-        `Expand-Archive -Force -Path '${archivePath}' -DestinationPath '${destDir}'`,
-      ]);
+      await run("powershell", buildWindowsExpandArchiveArgs(archivePath, destDir));
       return;
     }
     await run("unzip", ["-o", archivePath, "-d", destDir]);

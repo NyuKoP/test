@@ -23,8 +23,9 @@ type onionRoutePayload struct {
 	ToOnion      string `json:"toOnion"`
 	FromDeviceID string `json:"fromDeviceId"`
 	Route        struct {
-		Mode     string `json:"mode"`
-		TorOnion string `json:"torOnion"`
+		Mode            string `json:"mode"`
+		TorOnion        string `json:"torOnion"`
+		InboxWriteToken string `json:"inboxWriteToken"`
 	} `json:"route"`
 }
 
@@ -183,7 +184,7 @@ func (w *worker) forwardOnion(params transportForwardParams) (transportForwardRe
 		})
 		body, err := json.Marshal(map[string]any{
 			"toDeviceId": toDeviceID, "from": fromDeviceID, "envelope": payload.Envelope,
-			"ts": now, "id": msgID,
+			"ts": now, "id": msgID, "inboxWriteToken": payload.Route.InboxWriteToken,
 		})
 		if err != nil {
 			return transportForwardResult{}, err
@@ -228,7 +229,8 @@ func (w *worker) forwardOnion(params transportForwardParams) (transportForwardRe
 		if queue != nil {
 			_, err := queue.enqueue(enqueueParams{
 				ID: msgID, FriendID: toDeviceID, OnionAddress: torTarget,
-				Payload: payload.Envelope, CreatedAt: now,
+				Payload: payload.Envelope, InboxWriteToken: payload.Route.InboxWriteToken,
+				CreatedAt: now,
 			})
 			if err != nil {
 				return transportForwardResult{}, fmt.Errorf("queue_forward_failure:%w", err)

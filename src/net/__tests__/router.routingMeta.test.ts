@@ -143,12 +143,14 @@ describe("router routing metadata", () => {
     const { useAppStore } = await import("../../app/store");
     const identityPub = encodeBase64Url(new Uint8Array(32).fill(7));
     const dhPub = encodeBase64Url(new Uint8Array(32).fill(8));
+    const inboxWriteToken = encodeBase64Url(new Uint8Array(32).fill(9));
     const friendCode = encodeFriendCodeV1({
       v: 1,
       identityPub,
       dhPub,
       deviceId: "987e6543-e21b-42d3-a456-426614174999",
       onionAddr: "peer-recovered.onion",
+      inboxWriteToken,
     });
     useAppStore.getState().setData({
       user: {
@@ -220,11 +222,12 @@ describe("router routing metadata", () => {
       onionRouterTransport.send as unknown as { mock?: { calls?: unknown[][] } }
     ).mock?.calls?.[0]?.[0] as {
       toDeviceId?: string;
-      route?: { torOnion?: string };
+      route?: { torOnion?: string; inboxWriteToken?: string };
     } | undefined;
     expect(sentPacket?.toDeviceId).toBe("987e6543-e21b-42d3-a456-426614174999");
     expect(sentPacket?.route).toEqual({
       torOnion: "peer-recovered.onion",
+      inboxWriteToken,
     });
   });
 });

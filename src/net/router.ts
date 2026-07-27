@@ -38,6 +38,7 @@ type SendPayload = {
   toDeviceId?: string;
   route?: {
     torOnion?: string;
+    inboxWriteToken?: string;
   };
 };
 
@@ -67,7 +68,7 @@ const debugLog = (label: string, payload: Record<string, unknown>) => {
 
 type DerivedRoutingMeta = {
   toDeviceId?: string;
-  route?: { torOnion?: string };
+  route?: { torOnion?: string; inboxWriteToken?: string };
   staleDeviceAliases?: string[];
 };
 
@@ -94,6 +95,7 @@ const deriveRoutingMetaFromStores = (
       ? {
           toDeviceId: decodedFriendCode.deviceId,
           torOnion: decodedFriendCode.onionAddr,
+          inboxWriteToken: decodedFriendCode.inboxWriteToken,
         }
       : undefined;
   const toDeviceId =
@@ -102,9 +104,11 @@ const deriveRoutingMetaFromStores = (
     partner.deviceId ??
     recovered?.toDeviceId;
   const torOnion = partner.routingHints?.onionAddr ?? recovered?.torOnion;
+  const inboxWriteToken =
+    partner.routingHints?.inboxWriteToken ?? recovered?.inboxWriteToken;
   return {
     toDeviceId,
-    route: torOnion ? { torOnion } : undefined,
+    route: torOnion ? { torOnion, inboxWriteToken } : undefined,
     staleDeviceAliases: [partner.friendId, partner.id].filter(
       (value): value is string => Boolean(value && value.trim())
     ),
@@ -1037,6 +1041,7 @@ export const sendOutboxRecord = async (
     : false;
   const toDeviceId = (hasStaleAlias ? derived.toDeviceId : record.toDeviceId ?? derived.toDeviceId)?.trim();
   const torOnion = record.torOnion ?? derived.route?.torOnion;
+  const inboxWriteToken = derived.route?.inboxWriteToken;
   const policy = config.mode === "onionRouter" || config.onionEnabled ? "STRICT" : "ALLOW_FALLBACK";
 
   if ((!record.toDeviceId || hasStaleAlias) && (toDeviceId || torOnion)) {
@@ -1206,7 +1211,7 @@ export const sendOutboxRecord = async (
         ? new TextEncoder().encode(record.ciphertext)
         : record.ciphertext,
       toDeviceId,
-      route: torOnion ? { torOnion } : undefined,
+      route: torOnion ? { torOnion, inboxWriteToken } : undefined,
     } as TransportPacket;
     const startedAt = Date.now();
     emitFlowTraceLog({

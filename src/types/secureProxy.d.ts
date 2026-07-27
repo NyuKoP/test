@@ -68,6 +68,15 @@ declare global {
       applyUpdate: (payload: { network: "tor" }) => Promise<void>;
       onProgress: (cb: (payload: unknown) => void) => () => void;
     };
+    nkc?: {
+      getOnionControllerUrl?: () => Promise<string>;
+      registerOnionMailbox?: (deviceId: string) => Promise<{
+        ok: boolean;
+        inboxWriteToken?: string;
+        error?: string;
+      }>;
+      [key: string]: unknown;
+    };
     prefs?: {
       get: () => Promise<unknown>;
       set: (patch: unknown) => Promise<unknown>;

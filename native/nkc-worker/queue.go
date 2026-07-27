@@ -30,18 +30,19 @@ type friendRoute struct {
 }
 
 type queuedMessage struct {
-	ID            string `json:"id"`
-	FriendID      string `json:"friendId"`
-	OnionAddress  string `json:"onionAddress"`
-	Payload       string `json:"payload"`
-	Status        string `json:"status"`
-	CreatedAt     int64  `json:"createdAt"`
-	UpdatedAt     int64  `json:"updatedAt"`
-	DeliveredAt   int64  `json:"deliveredAt,omitempty"`
-	LastError     string `json:"lastError,omitempty"`
-	Attempts      int    `json:"attempts,omitempty"`
-	NextAttemptAt int64  `json:"nextAttemptAt,omitempty"`
-	FailedAt      int64  `json:"failedAt,omitempty"`
+	ID              string `json:"id"`
+	FriendID        string `json:"friendId"`
+	OnionAddress    string `json:"onionAddress"`
+	Payload         string `json:"payload"`
+	InboxWriteToken string `json:"inboxWriteToken,omitempty"`
+	Status          string `json:"status"`
+	CreatedAt       int64  `json:"createdAt"`
+	UpdatedAt       int64  `json:"updatedAt"`
+	DeliveredAt     int64  `json:"deliveredAt,omitempty"`
+	LastError       string `json:"lastError,omitempty"`
+	Attempts        int    `json:"attempts,omitempty"`
+	NextAttemptAt   int64  `json:"nextAttemptAt,omitempty"`
+	FailedAt        int64  `json:"failedAt,omitempty"`
 }
 
 type queueFile struct {
@@ -65,11 +66,12 @@ type setFriendsParams struct {
 	Friends []friendRoute `json:"friends"`
 }
 type enqueueParams struct {
-	ID           string `json:"id"`
-	FriendID     string `json:"friendId"`
-	OnionAddress string `json:"onionAddress"`
-	Payload      string `json:"payload"`
-	CreatedAt    int64  `json:"createdAt"`
+	ID              string `json:"id"`
+	FriendID        string `json:"friendId"`
+	OnionAddress    string `json:"onionAddress"`
+	Payload         string `json:"payload"`
+	InboxWriteToken string `json:"inboxWriteToken"`
+	CreatedAt       int64  `json:"createdAt"`
 }
 type setProxyParams struct {
 	ProxyURL string `json:"proxyUrl"`
@@ -304,7 +306,8 @@ func (q *queueStore) enqueue(input enqueueParams) (queuedMessage, error) {
 	}
 	message := queuedMessage{
 		ID: input.ID, FriendID: input.FriendID, OnionAddress: onion, Payload: input.Payload,
-		Status: "PENDING", CreatedAt: input.CreatedAt, UpdatedAt: now, NextAttemptAt: now,
+		InboxWriteToken: input.InboxWriteToken,
+		Status:          "PENDING", CreatedAt: input.CreatedAt, UpdatedAt: now, NextAttemptAt: now,
 	}
 	q.state.Messages = append(q.state.Messages, message)
 	found := false
@@ -583,9 +586,10 @@ func createOnionHTTPClient(proxyURL string, connectTimeout time.Duration) *http.
 
 func postIngest(client *http.Client, message queuedMessage, timeout time.Duration) error {
 	body, err := json.Marshal(map[string]any{
-		"id":         message.ID,
-		"toDeviceId": message.FriendID,
-		"envelope":   message.Payload,
+		"id":              message.ID,
+		"toDeviceId":      message.FriendID,
+		"envelope":        message.Payload,
+		"inboxWriteToken": message.InboxWriteToken,
 	})
 	if err != nil {
 		return err

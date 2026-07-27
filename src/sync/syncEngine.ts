@@ -497,6 +497,7 @@ const upsertFriendFromRequest = async (
       ? sanitizeRoutingHints({
           deviceId: decodedFriendCode.deviceId,
           onionAddr: decodedFriendCode.onionAddr,
+          inboxWriteToken: decodedFriendCode.inboxWriteToken,
         })
       : undefined;
   const resolvedDeviceId =
@@ -506,6 +507,8 @@ const upsertFriendFromRequest = async (
   const routingHints = sanitizeRoutingHints({
     deviceId: resolvedDeviceId,
     onionAddr: codeHints?.onionAddr ?? existing?.routingHints?.onionAddr,
+    inboxWriteToken:
+      codeHints?.inboxWriteToken ?? existing?.routingHints?.inboxWriteToken,
   });
   const reachability = resolvedDeviceId
     ? { status: "ok" as const }
@@ -691,6 +694,7 @@ const applyFriendResponse = async (convId: string, payload: FriendResponseFrame)
       ? sanitizeRoutingHints({
           deviceId: decodedFriendCode.deviceId,
           onionAddr: decodedFriendCode.onionAddr,
+          inboxWriteToken: decodedFriendCode.inboxWriteToken,
         })
       : undefined;
   const resolvedDeviceId =
@@ -708,6 +712,8 @@ const applyFriendResponse = async (convId: string, payload: FriendResponseFrame)
     routingHints: sanitizeRoutingHints({
       deviceId: resolvedDeviceId,
       onionAddr: codeHints?.onionAddr ?? existing.routingHints?.onionAddr,
+      inboxWriteToken:
+        codeHints?.inboxWriteToken ?? existing.routingHints?.inboxWriteToken,
     }),
     profileVcard: payload.profile
       ? {
@@ -1757,6 +1763,7 @@ const applyVerification = async (identityPub: string, deviceId?: string, profile
     routingHints: sanitizeRoutingHints({
       onionAddr: friend.routingHints?.onionAddr,
       deviceId: deviceId ?? friend.routingHints?.deviceId,
+      inboxWriteToken: friend.routingHints?.inboxWriteToken,
     }),
     verification: {
       status: "verified",

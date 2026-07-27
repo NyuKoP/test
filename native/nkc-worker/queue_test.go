@@ -107,11 +107,15 @@ func TestPostIngestUsesLiveOnionHTTPContract(t *testing.T) {
 		ID: "m1", FriendID: "device-1",
 		OnionAddress: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion",
 		Payload:      "encrypted-envelope",
+		InboxWriteToken: "mailbox-capability",
 	}
 	if err := postIngest(client, message, time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if received["toDeviceId"] != "device-1" || received["envelope"] != "encrypted-envelope" || received["id"] != "m1" {
+	if received["toDeviceId"] != "device-1" ||
+		received["envelope"] != "encrypted-envelope" ||
+		received["id"] != "m1" ||
+		received["inboxWriteToken"] != "mailbox-capability" {
 		t.Fatalf("unexpected ingest payload: %#v", received)
 	}
 }

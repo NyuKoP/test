@@ -109,6 +109,7 @@ const extractAbortSignal = (packet: TransportPacket) =>
 type SendRoute = {
   mode: RouteMode;
   torOnion?: string;
+  inboxWriteToken?: string;
 };
 
 const normalizeSendRoute = (route: SendRoute): SendRoute =>
@@ -309,9 +310,28 @@ export const createOnionRouterTransport = ({
         }
       }
       const baseUrl = await resolveControllerUrl();
+      const localDeviceId = getOrCreateDeviceId();
+      let mailboxToken: string | undefined;
+      const nkc = (
+        globalThis as {
+          nkc?: {
+            registerOnionMailbox?: (
+              deviceId: string
+            ) => Promise<{ ok: boolean; inboxWriteToken?: string; error?: string }>;
+          };
+        }
+      ).nkc;
+      if (nkc?.registerOnionMailbox) {
+        const mailbox = await nkc.registerOnionMailbox(localDeviceId);
+        if (!mailbox.ok) {
+          throw new Error(mailbox.error ?? "mailbox-registration-failed");
+        }
+        mailboxToken = mailbox.inboxWriteToken;
+      }
       client = new OnionInboxClient({
         baseUrl,
-        deviceId: getOrCreateDeviceId(),
+        deviceId: localDeviceId,
+        mailboxToken,
       });
       let health = await client.health();
       for (const delayMs of START_HEALTH_RETRY_DELAYS_MS.slice(1)) {
@@ -356,6 +376,9 @@ export const createOnionRouterTransport = ({
         (packet as { route?: { torOnion?: string; toOnion?: string } }).route?.toOnion ??
         (packet as { meta?: { torOnion?: string; toOnion?: string } }).meta?.torOnion ??
         (packet as { meta?: { torOnion?: string; toOnion?: string } }).meta?.toOnion;
+      const inboxWriteToken =
+        (packet as { route?: { inboxWriteToken?: string } }).route?.inboxWriteToken ??
+        (packet as { meta?: { inboxWriteToken?: string } }).meta?.inboxWriteToken;
       const routeMode =
         ((packet as { route?: { mode?: RouteMode } }).route?.mode ??
           (packet as { meta?: { routeMode?: RouteMode } }).meta?.routeMode ??
@@ -379,6 +402,7 @@ export const createOnionRouterTransport = ({
           ? {
               mode: routeMode,
               torOnion,
+              inboxWriteToken,
             }
           : undefined;
       let route = initialRoute ? normalizeSendRoute(initialRoute) : undefined;

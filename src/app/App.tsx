@@ -235,11 +235,12 @@ const toRuntimeDetail = (value: unknown) => {
 };
 
 const sameRoutingHints = (
-  lhs?: { onionAddr?: string; deviceId?: string },
-  rhs?: { onionAddr?: string; deviceId?: string }
+  lhs?: { onionAddr?: string; deviceId?: string; inboxWriteToken?: string },
+  rhs?: { onionAddr?: string; deviceId?: string; inboxWriteToken?: string }
 ) =>
   (lhs?.deviceId ?? "") === (rhs?.deviceId ?? "") &&
-  (lhs?.onionAddr ?? "") === (rhs?.onionAddr ?? "");
+  (lhs?.onionAddr ?? "") === (rhs?.onionAddr ?? "") &&
+  (lhs?.inboxWriteToken ?? "") === (rhs?.inboxWriteToken ?? "");
 
 const sameRuntimeNetworkSnapshot = (lhs: RuntimeNetworkSnapshot, rhs: RuntimeNetworkSnapshot) =>
   lhs.torState === rhs.torState &&
@@ -581,18 +582,29 @@ export default function App() {
     const fallback = sanitizeRoutingHints({
       deviceId: localDeviceId,
       onionAddr: userProfile?.routingHints?.onionAddr,
+      inboxWriteToken: userProfile?.routingHints?.inboxWriteToken,
     });
     const nkc = (
       globalThis as {
         nkc?: {
           ensureHiddenService?: () => Promise<unknown>;
           getMyOnionAddress?: () => Promise<string>;
+          registerOnionMailbox?: (
+            deviceId: string
+          ) => Promise<{ ok: boolean; inboxWriteToken?: string }>;
         };
       }
     ).nkc;
     if (!nkc) return fallback;
 
     let onionAddr: string | undefined;
+    let inboxWriteToken: string | undefined;
+    try {
+      const mailbox = await nkc.registerOnionMailbox?.(localDeviceId);
+      if (mailbox?.ok) inboxWriteToken = mailbox.inboxWriteToken;
+    } catch {
+      inboxWriteToken = undefined;
+    }
 
     if (netConfig.onionSelectedNetwork === "tor") {
       try {
@@ -605,12 +617,14 @@ export default function App() {
     const liveHints = sanitizeRoutingHints({
       deviceId: localDeviceId,
       onionAddr,
+      inboxWriteToken,
     });
     if (liveHints) return liveHints;
-    return sanitizeRoutingHints({ deviceId: localDeviceId }) ?? fallback;
+    return sanitizeRoutingHints({ deviceId: localDeviceId, inboxWriteToken }) ?? fallback;
   }, [
     netConfig.onionSelectedNetwork,
     userProfile?.routingHints?.onionAddr,
+    userProfile?.routingHints?.inboxWriteToken,
   ]);
 
   const buildLocalFriendCodePayload = useCallback(async (): Promise<Omit<FriendCodeV1, "v">> => {
@@ -624,6 +638,7 @@ export default function App() {
       dhPub: encodeBase64Url(dhPub),
       deviceId: getOrCreateDeviceId(),
       onionAddr: localHints?.onionAddr,
+      inboxWriteToken: localHints?.inboxWriteToken,
     };
   }, [resolveLocalRoutingHintsForFriendCode]);
 
@@ -1570,6 +1585,7 @@ export default function App() {
     return sanitizeRoutingHints({
       deviceId: decoded.deviceId,
       onionAddr: decoded.onionAddr,
+      inboxWriteToken: decoded.inboxWriteToken,
     });
   }, []);
 
@@ -1582,9 +1598,11 @@ export default function App() {
         profile.deviceId ??
         recovered?.deviceId;
       const torOnion = profile.routingHints?.onionAddr ?? recovered?.onionAddr;
+      const inboxWriteToken =
+        profile.routingHints?.inboxWriteToken ?? recovered?.inboxWriteToken;
       return {
         toDeviceId,
-        route: torOnion ? { torOnion } : undefined,
+        route: torOnion ? { torOnion, inboxWriteToken } : undefined,
       };
     },
     [recoverRoutingHintsFromFriendCode]
@@ -1597,6 +1615,8 @@ export default function App() {
       const mergedHints = sanitizeRoutingHints({
         deviceId: friend.routingHints?.deviceId ?? recovered.deviceId,
         onionAddr: friend.routingHints?.onionAddr ?? recovered.onionAddr,
+        inboxWriteToken:
+          friend.routingHints?.inboxWriteToken ?? recovered.inboxWriteToken,
       });
       const mergedPrimaryDeviceId = friend.primaryDeviceId ?? friend.deviceId ?? recovered.deviceId;
       const nextRoutingHints = mergedHints ?? friend.routingHints;
@@ -3878,6 +3898,7 @@ export default function App() {
             ? {
                 onionAddr: decoded.onionAddr,
                 deviceId: decoded.deviceId,
+                inboxWriteToken: decoded.inboxWriteToken,
               }
             : undefined
         );

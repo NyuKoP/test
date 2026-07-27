@@ -66,6 +66,19 @@ describe("friendCode", () => {
     expect("error" in decoded ? decoded.error : "").toBe("");
   });
 
+  it("round-trips a mailbox write capability", () => {
+    const inboxWriteToken = encodeBase64Url(makeBytes(71));
+    const code = encodeFriendCodeV1({
+      v: 1,
+      identityPub: encodeBase64Url(makeBytes(11)),
+      dhPub: encodeBase64Url(makeBytes(33)),
+      deviceId: "123e4567-e89b-42d3-a456-426614174000",
+      inboxWriteToken,
+    });
+    const decoded = decodeFriendCodeV1(code);
+    expect("error" in decoded ? undefined : decoded.inboxWriteToken).toBe(inboxWriteToken);
+  });
+
   it("decodes code with common paste noise", () => {
     const noisy = `"${makeCode()}:"`;
     const decoded = decodeFriendCodeV1(noisy);

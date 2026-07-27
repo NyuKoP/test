@@ -8,6 +8,7 @@ export type FriendCodeV1 = {
   dhPub: string;
   deviceId?: string;
   onionAddr?: string;
+  inboxWriteToken?: string;
 };
 
 const PREFIX = "NKC1-";
@@ -64,6 +65,7 @@ export const encodeFriendCodeV1 = (data: FriendCodeV1) => {
     dhPub: data.dhPub,
     deviceId: data.deviceId,
     onionAddr: data.onionAddr,
+    inboxWriteToken: data.inboxWriteToken,
   };
   const payloadBytes = canonicalBytes(payload);
   const checksum = checksum4Bytes(payloadBytes);
@@ -133,6 +135,11 @@ export const decodeFriendCodeV1 = (
   const deviceId = deviceIdCandidate && UUID_PATTERN.test(deviceIdCandidate)
     ? deviceIdCandidate
     : undefined;
+  const inboxWriteToken =
+    typeof payload.inboxWriteToken === "string" &&
+    /^[A-Za-z0-9_-]{43}$/.test(payload.inboxWriteToken)
+      ? payload.inboxWriteToken
+      : undefined;
 
   return {
     v: 1,
@@ -140,6 +147,7 @@ export const decodeFriendCodeV1 = (
     dhPub: payload.dhPub,
     deviceId,
     onionAddr: typeof payload.onionAddr === "string" ? payload.onionAddr : undefined,
+    inboxWriteToken,
   };
 };
 

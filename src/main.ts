@@ -798,6 +798,13 @@ const registerOnionControllerIpc = () => {
     assertTrustedIpcSender(event);
     return onionControllerUrl;
   });
+  ipcMain.handle("nkc:registerOnionMailbox", async (event, deviceId: string) => {
+    assertTrustedIpcSender(event);
+    if (!onionController) {
+      return { ok: false, error: ONION_CONTROLLER_NOT_READY_MESSAGE };
+    }
+    return onionController.registerMailbox(deviceId);
+  });
   ipcMain.handle("nkc:setOnionForwardProxy", async (event, proxyUrl: string | null) => {
     assertTrustedIpcSender(event);
     if (!onionController) {

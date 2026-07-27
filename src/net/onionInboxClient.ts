@@ -7,6 +7,7 @@ import { decodeBase64, encodeBase64 } from "../security/base64url";
 export type OnionInboxConfig = {
   baseUrl: string;
   deviceId: string;
+  mailboxToken?: string;
   timeoutMs?: number;
 };
 
@@ -106,11 +107,13 @@ const getNkcControllerFetch = () =>
 export class OnionInboxClient {
   private readonly baseUrl: string;
   private readonly deviceId: string;
+  private readonly mailboxToken?: string;
   private readonly timeoutMs: number;
 
   constructor(cfg: OnionInboxConfig) {
     this.baseUrl = cfg.baseUrl;
     this.deviceId = cfg.deviceId;
+    this.mailboxToken = cfg.mailboxToken;
     this.timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -152,7 +155,13 @@ export class OnionInboxClient {
 
   private async requestJson<T>(
     path: string,
-    init: { method: string; body?: unknown; timeoutMs?: number; operationId?: string },
+    init: {
+      method: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+      operationId?: string;
+    },
     signal?: AbortSignal
   ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
     const coalesceKey = this.toSharedRequestKey(path);
@@ -177,13 +186,22 @@ export class OnionInboxClient {
 
   private async requestJsonUncoalesced<T>(
     path: string,
-    init: { method: string; body?: unknown; timeoutMs?: number; operationId?: string },
+    init: {
+      method: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+      operationId?: string;
+    },
     signal?: AbortSignal
   ): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
     const url = new URL(path, this.baseUrl).toString();
     const body =
       init.body !== undefined ? JSON.stringify(init.body) : undefined;
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...init.headers,
+    };
     const timeoutMs = init.timeoutMs ?? this.timeoutMs;
     const operationId = init.operationId ?? path;
 
@@ -325,7 +343,11 @@ export class OnionInboxClient {
     toDeviceId: string,
     envelope: string,
     ttlMs?: number,
-    route?: { mode: "auto" | "preferTor" | "manual"; torOnion?: string },
+    route?: {
+      mode: "auto" | "preferTor" | "manual";
+      torOnion?: string;
+      inboxWriteToken?: string;
+    },
     signal?: AbortSignal,
     operationId?: string
   ): Promise<SendResponse> {
@@ -367,7 +389,12 @@ export class OnionInboxClient {
     if (limit) params.set("limit", String(limit));
     const response = await this.requestJson<PollResponse>(
       `/onion/inbox?${params}`,
-      { method: "GET" }
+      {
+        method: "GET",
+        headers: this.mailboxToken
+          ? { "X-NKC-Mailbox-Token": this.mailboxToken }
+          : undefined,
+      }
     );
     if (!response.ok || !response.data) {
       return {
@@ -391,7 +418,12 @@ export class OnionInboxClient {
     if (limit) params.set("limit", String(limit));
     const response = await this.requestJson<PollResponse>(
       `/onion/inbox?${params}`,
-      { method: "GET" },
+      {
+        method: "GET",
+        headers: this.mailboxToken
+          ? { "X-NKC-Mailbox-Token": this.mailboxToken }
+          : undefined,
+      },
       signal
     );
     if (!response.ok || !response.data) {

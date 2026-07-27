@@ -20,4 +20,10 @@ describe("network privacy routing hints", () => {
       })
     ).toBeUndefined();
   });
+
+  it("accepts only 256-bit base64url mailbox capabilities", () => {
+    const inboxWriteToken = "A".repeat(43);
+    expect(sanitizeRoutingHints({ inboxWriteToken })).toEqual({ inboxWriteToken });
+    expect(sanitizeRoutingHints({ inboxWriteToken: "too-short" })).toBeUndefined();
+  });
 });

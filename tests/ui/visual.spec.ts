@@ -39,7 +39,12 @@ test.describe("Visual snapshots", () => {
 
     const sidebar = page.getByTestId("sidebar");
     await expect(sidebar).toBeVisible();
-    await expect(sidebar).toHaveScreenshot("sidebar.png", { maxDiffPixelRatio: 0.001 });
+    const generatedAvatars = sidebar.locator('[class*="bg-[#"]');
+    await expect(generatedAvatars.first()).toBeVisible();
+    await expect(sidebar).toHaveScreenshot("sidebar.png", {
+      mask: [generatedAvatars],
+      maxDiffPixelRatio: 0.001,
+    });
   });
 
   test("chat view", async ({ page }) => {
@@ -58,6 +63,11 @@ test.describe("Visual snapshots", () => {
       "background-color",
       "rgb(47, 98, 115)"
     );
-    await expect(chatView).toHaveScreenshot("chat-view.png", { maxDiffPixelRatio: 0.001 });
+    const generatedAvatars = chatView.locator('[class*="bg-[#"]');
+    await expect(generatedAvatars.first()).toBeVisible();
+    await expect(chatView).toHaveScreenshot("chat-view.png", {
+      mask: [generatedAvatars],
+      maxDiffPixelRatio: 0.001,
+    });
   });
 });

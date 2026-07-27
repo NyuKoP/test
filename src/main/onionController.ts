@@ -1,5 +1,7 @@
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { URL } from "node:url";
 import type { TorStatus } from "./torManager";
 import type { SocksTransport } from "./socksHttpClient";
@@ -13,11 +15,14 @@ type InboxItem = {
   from: string;
   envelope: string;
   expiresAt: number;
+  admission: "authenticated" | "legacy";
 };
 
 type InboxState = {
   baseIndex: number;
   bytes: number;
+  legacyBytes: number;
+  legacyItems: number;
   items: InboxItem[];
 };
 
@@ -39,6 +44,9 @@ export type OnionControllerHandle = {
     onionAddress: string,
     options?: { timeoutMs?: number }
   ) => Promise<{ ok: boolean; elapsedMs: number; error?: string }>;
+  registerMailbox: (
+    deviceId: string
+  ) => Promise<{ ok: boolean; inboxWriteToken?: string; error?: string }>;
   close: () => Promise<void>;
 };
 
@@ -49,6 +57,11 @@ const MAX_INBOX_BYTES = 64 * 1024 * 1024;
 const MAX_DEVICE_INBOX_BYTES = 32 * 1024 * 1024;
 const MAX_INBOX_ITEMS = 4096;
 const MAX_DEVICE_INBOX_ITEMS = 2048;
+const MAX_LEGACY_INBOX_BYTES = 2 * 1024 * 1024;
+const MAX_DEVICE_LEGACY_INBOX_BYTES = 512 * 1024;
+const MAX_LEGACY_INBOX_ITEMS = 128;
+const MAX_DEVICE_LEGACY_INBOX_ITEMS = 32;
+const LEGACY_TTL_MS = 24 * 60 * 60 * 1000;
 const INGEST_RATE_WINDOW_MS = 1000;
 const MAX_INGESTS_PER_WINDOW = 120;
 const FORWARD_TIMEOUT_MS = 45_000;
@@ -97,6 +110,7 @@ export type OnionSendPayload = {
   route?: {
     mode?: "auto" | "preferTor" | "manual";
     torOnion?: string;
+    inboxWriteToken?: string;
   };
 };
 
@@ -105,7 +119,7 @@ type OnionSendDeps = {
   uuid: () => string;
   storeLocal: (
     deviceId: string,
-    item: Omit<InboxItem, "expiresAt"> & { ttlMs?: number }
+    item: Omit<InboxItem, "expiresAt" | "admission"> & { ttlMs?: number }
   ) => boolean | void;
   forwardRouted?: (
     payload: OnionSendPayload
@@ -196,10 +210,78 @@ export const startOnionController = async (options?: {
   const port = options?.port ?? 3210;
   const authToken = `${randomUUID()}${randomUUID()}`;
   const inbox = new Map<string, InboxState>();
+  const mailboxCapabilities = new Map<string, string>();
   let inboxBytes = 0;
   let inboxItems = 0;
+  let legacyInboxBytes = 0;
+  let legacyInboxItems = 0;
   let ingestWindowStartedAt = Date.now();
   let ingestWindowCount = 0;
+  const mailboxFile = options?.userDataPath
+    ? path.join(options.userDataPath, "onion-mailboxes-v1.json")
+    : null;
+  if (mailboxFile) {
+    try {
+      const parsed = JSON.parse(await readFile(mailboxFile, "utf8")) as {
+        mailboxes?: Record<string, string>;
+      };
+      for (const [deviceId, token] of Object.entries(parsed.mailboxes ?? {})) {
+        if (
+          deviceId.length > 0 &&
+          deviceId.length <= 256 &&
+          /^[A-Za-z0-9_-]{43}$/.test(token)
+        ) {
+          mailboxCapabilities.set(deviceId, token);
+        }
+      }
+    } catch (error) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (code !== "ENOENT") throw error;
+    }
+  }
+  let persistMailboxChain = Promise.resolve();
+  const persistMailboxes = () => {
+    if (!mailboxFile) return Promise.resolve();
+    persistMailboxChain = persistMailboxChain.catch(() => undefined).then(async () => {
+      await mkdir(path.dirname(mailboxFile), { recursive: true });
+      const temporaryPath = `${mailboxFile}.${process.pid}.${randomUUID()}.tmp`;
+      await writeFile(
+        temporaryPath,
+        JSON.stringify({ v: 1, mailboxes: Object.fromEntries(mailboxCapabilities) }),
+        { encoding: "utf8", mode: 0o600 }
+      );
+      await rename(temporaryPath, mailboxFile);
+    });
+    return persistMailboxChain;
+  };
+  const registerMailbox = async (deviceIdValue: string) => {
+    const deviceId = typeof deviceIdValue === "string" ? deviceIdValue.trim() : "";
+    if (!deviceId || deviceId.length > 256) {
+      return { ok: false, error: "invalid-device-id" };
+    }
+    const existing = mailboxCapabilities.get(deviceId);
+    if (existing) return { ok: true, inboxWriteToken: existing };
+    const inboxWriteToken = randomBytes(32).toString("base64url");
+    mailboxCapabilities.set(deviceId, inboxWriteToken);
+    try {
+      await persistMailboxes();
+      return { ok: true, inboxWriteToken };
+    } catch {
+      mailboxCapabilities.delete(deviceId);
+      return { ok: false, error: "mailbox-persistence-failed" };
+    }
+  };
+  const matchesMailboxCapability = (expected: string, candidate: string) => {
+    const expectedBytes = Buffer.from(expected, "utf8");
+    const candidateBytes = Buffer.from(candidate, "utf8");
+    return (
+      expectedBytes.length === candidateBytes.length &&
+      timingSafeEqual(expectedBytes, candidateBytes)
+    );
+  };
   const torForwarding: ForwardingState = {
     proxyUrl: null,
     proxyUrls: [],
@@ -333,12 +415,28 @@ export const startOnionController = async (options?: {
     Buffer.byteLength(item.envelope, "utf8") +
     32;
 
-  const enqueue = (deviceId: string, item: Omit<InboxItem, "expiresAt"> & { ttlMs?: number }) => {
-    const ttlMs = item.ttlMs ?? DEFAULT_TTL_MS;
+  const enqueue = (
+    deviceId: string,
+    item: Omit<InboxItem, "expiresAt" | "admission"> & {
+      ttlMs?: number;
+      admission?: "authenticated" | "legacy";
+    }
+  ) => {
+    const admission = item.admission ?? "authenticated";
+    const ttlMs =
+      admission === "legacy"
+        ? Math.min(item.ttlMs ?? LEGACY_TTL_MS, LEGACY_TTL_MS)
+        : item.ttlMs ?? DEFAULT_TTL_MS;
     const expiresAt = item.ts + ttlMs;
-    const entry: InboxItem = { ...item, expiresAt };
+    const entry: InboxItem = { ...item, admission, expiresAt };
     const entryBytes = getItemBytes(entry);
-    const state = inbox.get(deviceId) ?? { baseIndex: 0, bytes: 0, items: [] };
+    const state = inbox.get(deviceId) ?? {
+      baseIndex: 0,
+      bytes: 0,
+      legacyBytes: 0,
+      legacyItems: 0,
+      items: [],
+    };
     if (state.items.some((existing) => existing.id === item.id)) {
       return true;
     }
@@ -346,12 +444,23 @@ export const startOnionController = async (options?: {
       inboxItems >= MAX_INBOX_ITEMS ||
       state.items.length >= MAX_DEVICE_INBOX_ITEMS ||
       inboxBytes + entryBytes > MAX_INBOX_BYTES ||
-      state.bytes + entryBytes > MAX_DEVICE_INBOX_BYTES
+      state.bytes + entryBytes > MAX_DEVICE_INBOX_BYTES ||
+      (admission === "legacy" &&
+        (legacyInboxItems >= MAX_LEGACY_INBOX_ITEMS ||
+          state.legacyItems >= MAX_DEVICE_LEGACY_INBOX_ITEMS ||
+          legacyInboxBytes + entryBytes > MAX_LEGACY_INBOX_BYTES ||
+          state.legacyBytes + entryBytes > MAX_DEVICE_LEGACY_INBOX_BYTES))
     ) {
       return false;
     }
     state.items.push(entry);
     state.bytes += entryBytes;
+    if (admission === "legacy") {
+      state.legacyBytes += entryBytes;
+      state.legacyItems += 1;
+      legacyInboxBytes += entryBytes;
+      legacyInboxItems += 1;
+    }
     inboxBytes += entryBytes;
     inboxItems += 1;
     inbox.set(deviceId, state);
@@ -362,10 +471,19 @@ export const startOnionController = async (options?: {
     if (count <= 0) return;
     const removed = state.items.splice(0, count);
     const removedBytes = removed.reduce((total, item) => total + getItemBytes(item), 0);
+    const removedLegacy = removed.filter((item) => item.admission === "legacy");
+    const removedLegacyBytes = removedLegacy.reduce(
+      (total, item) => total + getItemBytes(item),
+      0
+    );
     state.baseIndex += removed.length;
     state.bytes = Math.max(0, state.bytes - removedBytes);
+    state.legacyBytes = Math.max(0, state.legacyBytes - removedLegacyBytes);
+    state.legacyItems = Math.max(0, state.legacyItems - removedLegacy.length);
     inboxBytes = Math.max(0, inboxBytes - removedBytes);
     inboxItems = Math.max(0, inboxItems - removed.length);
+    legacyInboxBytes = Math.max(0, legacyInboxBytes - removedLegacyBytes);
+    legacyInboxItems = Math.max(0, legacyInboxItems - removedLegacy.length);
   };
 
   const cleanup = () => {
@@ -469,12 +587,44 @@ export const startOnionController = async (options?: {
         sendJson(res, 400, { ok: false, items: [], nextAfter: null, error: "missing-device" });
         return;
       }
+      if (!mailboxCapabilities.has(deviceId)) {
+        sendJson(res, 403, {
+          ok: false,
+          items: [],
+          nextAfter: null,
+          error: "mailbox-not-registered",
+        });
+        return;
+      }
+      const expectedCapability = mailboxCapabilities.get(deviceId) ?? "";
+      const suppliedCapability =
+        typeof req.headers["x-nkc-mailbox-token"] === "string"
+          ? req.headers["x-nkc-mailbox-token"]
+          : "";
+      if (
+        !suppliedCapability ||
+        !matchesMailboxCapability(expectedCapability, suppliedCapability)
+      ) {
+        sendJson(res, 403, {
+          ok: false,
+          items: [],
+          nextAfter: null,
+          error: "mailbox-read-capability-required",
+        });
+        return;
+      }
       const afterRaw = url.searchParams.get("after");
       const afterIndex = afterRaw ? Number.parseInt(afterRaw, 10) : -1;
       const limitRaw = url.searchParams.get("limit");
       const parsedLimit = limitRaw ? Number.parseInt(limitRaw, 10) : 50;
       const limit = Number.isFinite(parsedLimit) ? Math.min(50, Math.max(1, parsedLimit)) : 50;
-      const state = inbox.get(deviceId) ?? { baseIndex: 0, bytes: 0, items: [] };
+      const state = inbox.get(deviceId) ?? {
+        baseIndex: 0,
+        bytes: 0,
+        legacyBytes: 0,
+        legacyItems: 0,
+        items: [],
+      };
       if (Number.isFinite(afterIndex) && afterIndex >= state.baseIndex) {
         removeItems(state, Math.min(state.items.length, afterIndex - state.baseIndex + 1));
       }
@@ -516,6 +666,7 @@ export const startOnionController = async (options?: {
         envelope?: string;
         ts?: number;
         id?: string;
+        inboxWriteToken?: string;
       };
       try {
         payload = JSON.parse(parsed.body) as {
@@ -524,6 +675,7 @@ export const startOnionController = async (options?: {
           envelope?: string;
           ts?: number;
           id?: string;
+          inboxWriteToken?: string;
         };
       } catch {
         sendJson(res, 400, { ok: false, error: "invalid-json" });
@@ -547,11 +699,26 @@ export const startOnionController = async (options?: {
       }
       const msgId = payload.id ?? randomUUID();
       const ts = Date.now();
+      const expectedCapability = mailboxCapabilities.get(payload.toDeviceId);
+      if (!expectedCapability) {
+        sendJson(res, 404, { ok: false, error: "unknown-mailbox" });
+        return;
+      }
+      const suppliedCapability =
+        typeof payload.inboxWriteToken === "string" ? payload.inboxWriteToken : "";
+      if (
+        suppliedCapability &&
+        !matchesMailboxCapability(expectedCapability, suppliedCapability)
+      ) {
+        sendJson(res, 401, { ok: false, error: "invalid-mailbox-capability" });
+        return;
+      }
       const accepted = enqueue(payload.toDeviceId, {
         id: msgId,
         ts,
         from: payload.from ?? "",
         envelope: payload.envelope,
+        admission: suppliedCapability ? "authenticated" : "legacy",
       });
       if (!accepted) {
         sendJson(res, 429, { ok: false, error: "inbox-capacity-exceeded" });
@@ -584,6 +751,7 @@ export const startOnionController = async (options?: {
     setTorSocksProxies,
     setTorOnionHost,
     prewarmTorRoute,
+    registerMailbox,
     close: async () => {
       clearInterval(cleanupTimer);
       await Promise.all(torForwarding.proxyUrls.map((proxyUrl) => socksTransport.clearProxy(proxyUrl)));

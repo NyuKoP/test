@@ -96,7 +96,7 @@ export type UserProfile = {
   primaryDeviceId?: string;
   identityPub?: string;
   dhPub?: string;
-  routingHints?: { onionAddr?: string; deviceId?: string };
+  routingHints?: { onionAddr?: string; deviceId?: string; inboxWriteToken?: string };
   trust?: { pinnedAt: number; status: "trusted" | "blocked" | "changed"; reason?: string };
   verification?: {
     status: "unverified" | "verified" | "key_changed" | "blocked";

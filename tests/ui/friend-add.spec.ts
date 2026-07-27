@@ -20,6 +20,9 @@ type OnionInboxItem = {
 type OnionTestServer = {
   baseUrl: string;
   getInboxCount: (deviceId: string) => number;
+  registerMailbox: (
+    deviceId: string
+  ) => { ok: boolean; inboxWriteToken?: string; error?: string };
   close: () => Promise<void>;
 };
 
@@ -50,6 +53,7 @@ const readBody = (req: http.IncomingMessage) =>
 
 const startOnionTestServer = async (): Promise<OnionTestServer> => {
   const inbox = new Map<string, OnionInboxItem[]>();
+  const mailboxTokens = new Map<string, string>();
 
   const server = http.createServer(async (req, res) => {
     if (req.method === "OPTIONS") {
@@ -71,6 +75,17 @@ const startOnionTestServer = async (): Promise<OnionTestServer> => {
         sendJson(res, 400, { ok: false, items: [], nextAfter: null, error: "missing-device" });
         return;
       }
+      const expectedToken = mailboxTokens.get(deviceId);
+      const suppliedToken = req.headers["x-nkc-mailbox-token"];
+      if (!expectedToken || suppliedToken !== expectedToken) {
+        sendJson(res, 403, {
+          ok: false,
+          items: [],
+          nextAfter: null,
+          error: "mailbox-read-capability-required",
+        });
+        return;
+      }
       const afterRaw = url.searchParams.get("after");
       const after = afterRaw ? Number.parseInt(afterRaw, 10) : -1;
       const start = Number.isFinite(after) ? after + 1 : 0;
@@ -88,12 +103,14 @@ const startOnionTestServer = async (): Promise<OnionTestServer> => {
         toDeviceId?: string;
         fromDeviceId?: string;
         envelope?: string;
+        route?: { inboxWriteToken?: string };
       };
       try {
         parsed = JSON.parse(await readBody(req)) as {
           toDeviceId?: string;
           fromDeviceId?: string;
           envelope?: string;
+          route?: { inboxWriteToken?: string };
         };
       } catch {
         sendJson(res, 400, { ok: false, error: "invalid-json" });
@@ -102,6 +119,11 @@ const startOnionTestServer = async (): Promise<OnionTestServer> => {
 
       if (!parsed.toDeviceId || !parsed.envelope) {
         sendJson(res, 400, { ok: false, error: "missing-fields" });
+        return;
+      }
+      const expectedToken = mailboxTokens.get(parsed.toDeviceId);
+      if (!expectedToken || parsed.route?.inboxWriteToken !== expectedToken) {
+        sendJson(res, 401, { ok: false, error: "invalid-mailbox-capability" });
         return;
       }
 
@@ -136,6 +158,15 @@ const startOnionTestServer = async (): Promise<OnionTestServer> => {
   return {
     baseUrl,
     getInboxCount: (deviceId: string) => inbox.get(deviceId)?.length ?? 0,
+    registerMailbox: (deviceId: string) => {
+      const normalized = deviceId.trim();
+      if (!normalized) return { ok: false, error: "invalid-device-id" };
+      const existing = mailboxTokens.get(normalized);
+      if (existing) return { ok: true, inboxWriteToken: existing };
+      const inboxWriteToken = randomBytes(32).toString("base64url");
+      mailboxTokens.set(normalized, inboxWriteToken);
+      return { ok: true, inboxWriteToken };
+    },
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
@@ -205,12 +236,36 @@ const makeFriendCode = () => {
 
 const seedNetworkConfig = async (
   page: import("@playwright/test").Page,
-  onionControllerUrl: string,
+  onionServer: OnionTestServer,
   options?: {
     serviceAddress?: string;
     mode?: "onionRouter" | "selfOnion";
   }
 ) => {
+  await page.exposeFunction(
+    "__nkcE2EControllerFetch",
+    async (req: {
+      url: string;
+      method: string;
+      headers?: Record<string, string>;
+      bodyBase64?: string;
+    }) => {
+      const response = await fetch(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: req.bodyBase64 ? Buffer.from(req.bodyBase64, "base64") : undefined,
+      });
+      const body = Buffer.from(await response.arrayBuffer());
+      return {
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+        bodyBase64: body.toString("base64"),
+      };
+    }
+  );
+  await page.exposeFunction("__nkcE2ERegisterMailbox", async (deviceId: string) =>
+    onionServer.registerMailbox(deviceId)
+  );
   await page.addInitScript(({ url, serviceAddress, mode }) => {
     const secureStoragePrefix = "nkc-e2e-secure-storage:";
     Object.defineProperty(window, "electron", {
@@ -230,44 +285,29 @@ const seedNetworkConfig = async (
         },
       },
     });
-    const encodeBase64 = (value: string) => {
-      const bytes = new TextEncoder().encode(value);
-      let binary = "";
-      bytes.forEach((byte) => {
-        binary += String.fromCharCode(byte);
-      });
-      return btoa(binary);
-    };
-    const decodeBase64 = (value: string) => {
-      const binary = atob(value);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i += 1) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      return new TextDecoder().decode(bytes);
+    const bridge = window as typeof window & {
+      __nkcE2EControllerFetch: (req: {
+        url: string;
+        method: string;
+        headers?: Record<string, string>;
+        bodyBase64?: string;
+      }) => Promise<unknown>;
+      __nkcE2ERegisterMailbox: (
+        deviceId: string
+      ) => Promise<{ ok: boolean; inboxWriteToken?: string; error?: string }>;
     };
     Object.defineProperty(window, "nkc", {
       configurable: true,
       value: {
         getOnionControllerUrl: async () => url,
-        onionControllerFetch: async (req: {
+        onionControllerFetch: (req: {
           url: string;
           method: string;
           headers?: Record<string, string>;
           bodyBase64?: string;
-        }) => {
-          const response = await fetch(req.url, {
-            method: req.method,
-            headers: req.headers,
-            body: req.bodyBase64 ? decodeBase64(req.bodyBase64) : undefined,
-          });
-          const body = await response.text();
-          return {
-            status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            bodyBase64: encodeBase64(body),
-          };
-        },
+        }) => bridge.__nkcE2EControllerFetch(req),
+        registerOnionMailbox: (deviceId: string) =>
+          bridge.__nkcE2ERegisterMailbox(deviceId),
         ensureHiddenService: async () => ({ ok: true }),
         getMyOnionAddress: async () => serviceAddress ?? "",
         prewarmOnionRoute: async () => ({ ok: true, elapsedMs: 1 }),
@@ -296,7 +336,7 @@ const seedNetworkConfig = async (
     );
     localStorage.setItem("onion_controller_url_v1", url);
   }, {
-    url: onionControllerUrl,
+    url: onionServer.baseUrl,
     serviceAddress: options?.serviceAddress ?? "",
     mode: options?.mode ?? "onionRouter",
   });
@@ -358,7 +398,7 @@ test.describe("Friend add E2E", () => {
 
   test("adds friend and shows it in friend list", async ({ page }) => {
     const { friendCode, expectedDisplayName } = makeFriendCode();
-    await seedNetworkConfig(page, onionServer.baseUrl);
+    await seedNetworkConfig(page, onionServer);
     await enableFriendFlowCapture(page);
 
     await page.goto("/");
@@ -422,11 +462,11 @@ test.describe("Friend add E2E", () => {
     const bob = await bobContext.newPage();
     const aliceServiceAddress = `${"a".repeat(56)}.onion`;
     const bobServiceAddress = `${"b".repeat(56)}.onion`;
-    await seedNetworkConfig(alice, onionServer.baseUrl, {
+    await seedNetworkConfig(alice, onionServer, {
       serviceAddress: aliceServiceAddress,
       mode,
     });
-    await seedNetworkConfig(bob, onionServer.baseUrl, {
+    await seedNetworkConfig(bob, onionServer, {
       serviceAddress: bobServiceAddress,
       mode,
     });

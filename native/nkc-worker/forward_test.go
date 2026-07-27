@@ -35,6 +35,7 @@ func forwardParams(mode string) transportForwardParams {
 	params.Payload.Envelope = "ciphertext"
 	params.Payload.Route.Mode = mode
 	params.Payload.Route.TorOnion = testTorOnion
+	params.Payload.Route.InboxWriteToken = "mailbox-capability"
 	return params
 }
 
@@ -66,7 +67,9 @@ func TestForwardQueuesTorFailure(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	queued := w.getQueue().list()
-	if len(queued) != 1 || queued[0].Payload != "ciphertext" || queued[0].OnionAddress != testTorOnion {
+	if len(queued) != 1 || queued[0].Payload != "ciphertext" ||
+		queued[0].OnionAddress != testTorOnion ||
+		queued[0].InboxWriteToken != "mailbox-capability" {
 		t.Fatalf("unexpected queue: %#v", queued)
 	}
 }
@@ -104,7 +107,9 @@ func TestForwardSendsExpectedIngestEnvelope(t *testing.T) {
 		if err = json.Unmarshal(raw, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["toDeviceId"] != "peer-1" || payload["from"] != "sender-1" || payload["envelope"] != "ciphertext" {
+		if payload["toDeviceId"] != "peer-1" || payload["from"] != "sender-1" ||
+			payload["envelope"] != "ciphertext" ||
+			payload["inboxWriteToken"] != "mailbox-capability" {
 			t.Fatalf("unexpected payload: %#v", payload)
 		}
 		return transportFetchResult{Status: http.StatusOK}, nil
